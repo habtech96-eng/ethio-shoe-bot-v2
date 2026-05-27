@@ -40,6 +40,57 @@ def register_handlers(bot):
                 reply_markup=keyboards.get_main_menu()
             )
 
+    # 🛠️ ማስተካከያ፡ የ /cart መቆጣጠሪያውን ሁሉንም የጽሑፍ መልዕክት ከሚይዘው handler በላይ አምጥተነዋል
+    @bot.message_handler(commands=['cart'])
+    def show_cart(message):
+        chat_id = message.chat.id
+        user = db.get_user(message.from_user.id)
+
+        if not user:
+            bot.send_message(chat_id, "⚠️ እባክዎ መጀመሪያ /start ይጫኑ።")
+            return
+
+        try:
+            cart_items = db.get_cart_items(user['id'])
+        except Exception as e:
+            logger.error(f"Cart acquisition transaction exception raised: {e}")
+            bot.send_message(chat_id, "❌ የጋሪ መረጃዎችን ማምጣት አልተሳካም።")
+            return
+
+        if not cart_items:
+            bot.send_message(chat_id, "🛒 ጋሪዎ ባዶ ነው።")
+            return
+
+        total = 0
+        cart_text = "🛒 **የእርስዎ ጋሪ፦**\n\n"
+
+        for item in cart_items:
+            variant = item.get('product_variants', {})
+            product = variant.get('products', {}) if variant else {}
+            quantity = item.get('quantity', 1)
+            price = product.get('base_price', 0) if product else 0
+            subtotal = price * quantity
+            total += subtotal
+
+            if product:
+                cart_text += (
+                    f"👟 **{product.get('name', 'ጫማ')}**\n"
+                    f"   📐 Size: {variant.get('size', 'N/A')}\n"
+                    f"   🎨 Color: {variant.get('color', 'N/A')}\n"
+                    f"   📦 Qty: {quantity}\n"
+                    f"   💵 {subtotal} ETB (ብር)\n\n"
+                )
+
+        cart_text += f"💰 **ጠቅላላ: {total} ETB (ብር)**"
+
+        bot.send_message(
+            chat_id,
+            cart_text,
+            parse_mode="Markdown",
+            reply_markup=keyboards.get_cart_checkout_keyboard()
+        )
+
+    # ⚠️ ሁሉንም የጽሑፍ መልዕክት የሚይዘው (Catch-all text handler) አሁን ከታች ሆኗል
     @bot.message_handler(func=lambda message: True)
     def handle_messages(message):
         chat_id = message.chat.id
@@ -296,55 +347,6 @@ def register_handlers(bot):
         except Exception as e:
             logger.error(f"Failed handling cart transaction sequence: {e}")
             bot.send_message(chat_id, "❌ ምርቱን ወደ ጋሪ መጫን አልተሳካም።")
-
-    @bot.message_handler(commands=['cart'])
-    def show_cart(message):
-        chat_id = message.chat.id
-        user = db.get_user(message.from_user.id)
-
-        if not user:
-            bot.send_message(chat_id, "⚠️ እባክዎ መጀመሪያ /start ይጫኑ።")
-            return
-
-        try:
-            cart_items = db.get_cart_items(user['id'])
-        except Exception as e:
-            logger.error(f"Cart acquisition transaction exception raised: {e}")
-            bot.send_message(chat_id, "❌ የጋሪ መረጃዎችን ማምጣት አልተሳካም።")
-            return
-
-        if not cart_items:
-            bot.send_message(chat_id, "🛒 ጋሪዎ ባዶ ነው።")
-            return
-
-        total = 0
-        cart_text = "🛒 **የእርስዎ ጋሪ፦**\n\n"
-
-        for item in cart_items:
-            variant = item.get('product_variants', {})
-            product = variant.get('products', {}) if variant else {}
-            quantity = item.get('quantity', 1)
-            price = product.get('base_price', 0) if product else 0
-            subtotal = price * quantity
-            total += subtotal
-
-            if product:
-                cart_text += (
-                    f"👟 **{product.get('name', 'ጫማ')}**\n"
-                    f"   📐 Size: {variant.get('size', 'N/A')}\n"
-                    f"   🎨 Color: {variant.get('color', 'N/A')}\n"
-                    f"   📦 Qty: {quantity}\n"
-                    f"   💵 {subtotal} ETB (ብር)\n\n"
-                )
-
-        cart_text += f"💰 **ጠቅላላ: {total} ETB (ብር)**"
-
-        bot.send_message(
-            chat_id,
-            cart_text,
-            parse_mode="Markdown",
-            reply_markup=keyboards.get_cart_checkout_keyboard()
-        )
 
     @bot.callback_query_handler(func=lambda call: call.data == "admin_view_orders")
     def admin_view_orders(call):
