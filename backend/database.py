@@ -4,6 +4,7 @@ PostgreSQL backend using Supabase
 """
 import os
 from typing import Optional, List, Dict, Any
+from datetime import datetime, timezone
 from supabase import create_client, Client
 from dotenv import load_dotenv
 import logging
@@ -32,6 +33,10 @@ class DatabaseManager:
     def __init__(self):
         self.client = supabase
 
+    def _get_current_time(self) -> str:
+        """Helper to get current time in ISO format with UTC timezone"""
+        return datetime.now(timezone.utc).isoformat()
+
     # ============================================================
     # USER MANAGEMENT
     # ============================================================
@@ -44,7 +49,7 @@ class DatabaseManager:
 
             if existing.data:
                 # Update user info if exists
-                update_data = {'first_name': first_name, 'updated_at': 'now()'}
+                update_data = {'first_name': first_name, 'updated_at': self._get_current_time()}
                 if username:
                     update_data['username'] = username
                 if phone_number:
@@ -91,7 +96,7 @@ class DatabaseManager:
     # ============================================================
 
     def add_address(self, user_id: str, city: str, subcity_or_zone: str = None,
-                   specific_location: str = None, is_default: bool = False) -> Optional[Dict[str, Any]]:
+                    specific_location: str = None, is_default: bool = False) -> Optional[Dict[str, Any]]:
         """Add a new address for user"""
         try:
             # If setting as default, unset other defaults
@@ -126,7 +131,7 @@ class DatabaseManager:
     # ============================================================
 
     def add_product(self, name: str, category: str, base_price: int, description: str = None,
-                   brand: str = None, original_price: int = None) -> Optional[Dict[str, Any]]:
+                    brand: str = None, original_price: int = None) -> Optional[Dict[str, Any]]:
         """Add a new product"""
         try:
             product_data = {
@@ -181,7 +186,7 @@ class DatabaseManager:
     def update_product(self, product_id: str, update_data: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         """Update a product"""
         try:
-            update_data['updated_at'] = 'now()'
+            update_data['updated_at'] = self._get_current_time()
             result = self.client.table('products').update(update_data).eq('id', product_id).execute()
             logger.info(f"Updated product: {product_id}")
             return result.data[0] if result.data else None
@@ -192,7 +197,7 @@ class DatabaseManager:
     def delete_product(self, product_id: str) -> bool:
         """Delete a product (soft delete)"""
         try:
-            result = self.client.table('products').update({'is_active': False}).eq('id', product_id).execute()
+            result = self.client.table('products').update({'is_active': False, 'updated_at': self._get_current_time()}).eq('id', product_id).execute()
             logger.info(f"Deleted product: {product_id}")
             return True
         except Exception as e:
@@ -204,7 +209,7 @@ class DatabaseManager:
     # ============================================================
 
     def add_product_variant(self, product_id: str, size: int, color: str,
-                           stock: int = 0, image_url: str = None) -> Optional[Dict[str, Any]]:
+                            stock: int = 0, image_url: str = None) -> Optional[Dict[str, Any]]:
         """Add a product variant (size/color combination)"""
         try:
             variant_data = {
@@ -245,7 +250,7 @@ class DatabaseManager:
         """Update stock for a variant"""
         try:
             result = self.client.table('product_variants').update(
-                {'stock': stock, 'updated_at': 'now()'}
+                {'stock': stock, 'updated_at': self._get_current_time()}
             ).eq('id', variant_id).execute()
             logger.info(f"Updated stock for variant: {variant_id}")
             return True
@@ -267,7 +272,7 @@ class DatabaseManager:
                 # Update quantity
                 new_quantity = existing.data[0]['quantity'] + quantity
                 result = self.client.table('cart_items').update(
-                    {'quantity': new_quantity, 'updated_at': 'now()'}
+                    {'quantity': new_quantity, 'updated_at': self._get_current_time()}
                 ).eq('id', existing.data[0]['id']).execute()
                 return result.data[0] if result.data else None
 
@@ -299,7 +304,7 @@ class DatabaseManager:
         """Update quantity of cart item"""
         try:
             result = self.client.table('cart_items').update(
-                {'quantity': quantity, 'updated_at': 'now()'}
+                {'quantity': quantity, 'updated_at': self._get_current_time()}
             ).eq('id', cart_item_id).execute()
             return True
         except Exception as e:
@@ -341,7 +346,6 @@ class DatabaseManager:
 
             # Check expiration
             if promo.get('expires_at'):
-                from datetime import datetime
                 expires = datetime.fromisoformat(promo['expires_at'].replace('Z', '+00:00'))
                 if datetime.now(expires.tzinfo) > expires:
                     return None
@@ -365,20 +369,20 @@ class DatabaseManager:
             result = self.client.table('promo_codes').select('current_uses').eq('id', promo_id).execute()
             if result.data:
                 new_uses = result.data[0]['current_uses'] + 1
-                self.client.table('promo_codes').update({'current_uses': new_uses}).eq('id', promo_id).execute()
+                self.client.table('promo_codes').update({'current_uses': new_uses, 'updated_at': self._get_current_time()}).eq('id', promo_id).execute()
                 return True
             return False
         except Exception as e:
             logger.error(f"Error applying promo code: {e}")
-            return False
+            return None
 
     # ============================================================
     # ORDER MANAGEMENT
     # ============================================================
 
     def create_order(self, user_id: str, items: List[Dict[str, Any]], subtotal: int,
-                    delivery_fee: int, discount_amount: int, total_amount: int,
-                    shipping_address_id: str, contact_phone: str, promo_code_id: str = None) -> Optional[Dict[str, Any]]:
+                     delivery_fee: int, discount_amount: int, total_amount: int,
+                     shipping_address_id: str, contact_phone: str, promo_code_id: str = None) -> Optional[Dict[str, Any]]:
         """Create a new order"""
         try:
             order_data = {
@@ -460,7 +464,7 @@ class DatabaseManager:
                 return False
 
             result = self.client.table('orders').update(
-                {'order_status': status, 'updated_at': 'now()'}
+                {'order_status': status, 'updated_at': self._get_current_time()}
             ).eq('id', order_id).execute()
             logger.info(f"Updated order {order_id} status to {status}")
             return True
@@ -491,11 +495,11 @@ class DatabaseManager:
     def verify_payment(self, payment_id: str, admin_telegram_id: int) -> bool:
         """Verify a payment (admin only)"""
         try:
-            from datetime import datetime
             update_data = {
                 'is_verified': True,
                 'verified_by_admin_id': admin_telegram_id,
-                'verified_at': datetime.utcnow().isoformat()
+                'verified_at': self._get_current_time(),
+                'updated_at': self._get_current_time()
             }
             result = self.client.table('payments').update(update_data).eq('id', payment_id).execute()
             logger.info(f"Payment {payment_id} verified by admin {admin_telegram_id}")

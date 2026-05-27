@@ -2,9 +2,13 @@
 Bot handlers for Ethiopian Shoe Store
 Updated to use PostgreSQL/Supabase backend
 """
+
 from config import ADMIN_IDS
 import keyboards
 from backend.database import db
+import logging
+
+logger = logging.getLogger(__name__)
 
 
 def register_handlers(bot):
@@ -13,13 +17,17 @@ def register_handlers(bot):
     def send_welcome(message):
         chat_id = message.chat.id
         telegram_id = message.from_user.id
-        first_name = message.from_user.first_name
+        first_name = message.from_user.first_name or "Customer"
         username = message.from_user.username
 
-        # Create or update user in database
-        user = db.create_user(telegram_id, first_name, username)
+        # Create or update user in database safely
+        try:
+            db.create_user(telegram_id, first_name, username)
+        except Exception as e:
+            logger.error(f"Database error during user registration for {telegram_id}: {e}")
 
-        if chat_id in ADMIN_IDS:
+        # Secure authorization: validate explicit telegram_id instead of chat_id
+        if telegram_id in ADMIN_IDS:
             bot.send_message(
                 chat_id,
                 f"👨‍💼 ሰላም አድሚን {first_name}!",
@@ -35,11 +43,11 @@ def register_handlers(bot):
     @bot.message_handler(func=lambda message: True)
     def handle_messages(message):
         chat_id = message.chat.id
-        text = message.text.strip()
+        text = message.text.strip() if message.text else ""
         telegram_id = message.from_user.id
 
         if text == "🔐 Admin Panel":
-            if chat_id in ADMIN_IDS:
+            if telegram_id in ADMIN_IDS:  # Patched secure check
                 bot.send_message(
                     chat_id,
                     "🛠️ የአድሚን ማዘዣ ሰሌዳ፦",
@@ -49,7 +57,7 @@ def register_handlers(bot):
                 bot.send_message(chat_id, "⚠️ ይቅርታ፣ ይህ አልተፈቀደም።")
 
         elif text == "🔄 ወደ ዋና ማውጫ":
-            reply_keyboard = keyboards.get_admin_main_menu() if chat_id in ADMIN_IDS else keyboards.get_main_menu()
+            reply_keyboard = keyboards.get_admin_main_menu() if telegram_id in ADMIN_IDS else keyboards.get_main_menu()
             bot.send_message(chat_id, "🏠 ወደ ዋና ማውጫ ተመልሰዋል።", reply_markup=reply_keyboard)
 
         elif text == "👟 ምርቶችን እይ":
@@ -59,57 +67,59 @@ def register_handlers(bot):
                 reply_markup=keyboards.get_category_menu()
             )
 
-        elif text in ["👞 የወንዶች ጫማዎች", "👠 የሴቶች ጫማዎች", "👟 የህፃናት ጫማዎች", "👥 የሁለቱም/Unisex"]:
-            # Map text to category
+        elif text in ["👞 የወንዶች ጫማዎች", "👠 የሴቶች ጫማዎች", "👟 የህፃናት ጫማዎች", "👥 የሁለቱም"]:
             category_map = {
                 "👞 የወንዶች ጫማዎች": "የወንዶች",
                 "👠 የሴቶች ጫማዎች": "የሴቶች",
                 "👟 የህፃናት ጫማዎች": "የህፃናት",
-                "👥 የሁለቱም/Unisex": "የሁለቱም/Unisex"
+                "👥 የሁለቱም": "የሁለቱም"
             }
             category = category_map.get(text, "የወንዶች")
 
-            # Get products from PostgreSQL
-            products = db.get_products_by_category(category)
+            try:
+                products = db.get_products_by_category(category)
+            except Exception as e:
+                logger.error(f"Failed to fetch products for {category}: {e}")
+                bot.send_message(chat_id, "❌ መረጃዎችን ከማውጫው ላይ ማግኘት አልተሳካም። እባክዎ ትንሽ ቆይተው ይሞክሩ።")
+                return
 
             if not products:
                 bot.send_message(chat_id, f"⚠️ በአሁኑ ሰዓት በ '{category}' ምድብ ስር ምንም ምርት የለም።")
                 return
 
-            # Display products with variants
-            for product in products:
+            # Safety Guard: Clamped loop to prevent triggering HTTP 429 Rate Limiting issues
+            for product in products[:10]:
                 variants = product.get('product_variants', [])
 
-                # Format price with ETB
-                base_price = product['base_price']
+                base_price = product.get('base_price', 0)
                 original_price = product.get('original_price')
 
                 price_display = f"💵 **ዋጋ፦** {base_price} ETB (ብር)"
                 if original_price and original_price > base_price:
                     price_display = f"💵 **ዋጋ፦** ~~{original_price} ETB~~ **{base_price} ETB (ብር)**"
 
-                # Format variants
                 variants_text = ""
                 if variants:
                     sizes = sorted(set(v['size'] for v in variants if v.get('stock', 0) > 0))
                     colors = sorted(set(v['color'] for v in variants if v.get('stock', 0) > 0))
                     total_stock = sum(v.get('stock', 0) for v in variants)
 
-                    variants_text = f"\n📐 **ያሉ ሳይዞች፦** {', '.join(map(str, sizes))}\n🎨 **ቀለሞች፦** {', '.join(colors)}\n📦 **በስቶክ ያለው፦** {total_stock} ጥንድ"
+                    if total_stock > 0:
+                        variants_text = f"\n📐 **ያሉ ሳይዞች፦** {', '.join(map(str, sizes))}\n🎨 **ቀለሞች፦** {', '.join(colors)}\n📦 **በስቶክ ያለው፦** {total_stock} ጥንድ"
+                    else:
+                        variants_text = "\n❌ **ይህ ምርት በአሁኑ ሰዓት አልቋል (Out of Stock)**"
 
                 caption = (
-                    f"👟 **{product['name']}**\n\n"
+                    f"👟 **{product.get('name', 'ያልተገኘ ምርት')}**\n\n"
                     f"{price_display}"
                     f"{variants_text}\n\n"
-                    f"📝 {product.get('description', 'ጥሩ ጥራት ያለ ጫማ')}"
+                    f"📝 {product.get('description', 'ጥሩ ጥራት ያለው ጫማ')}"
                 )
 
-                # Get first variant image if available
                 image_url = None
                 if variants and variants[0].get('image_url'):
                     image_url = variants[0]['image_url']
 
-                # Send message with inline keyboard for ordering
                 inline_markup = keyboards.get_product_detail_keyboard(product['id'])
 
                 if image_url:
@@ -121,20 +131,11 @@ def register_handlers(bot):
                             parse_mode="Markdown",
                             reply_markup=inline_markup
                         )
-                    except:
-                        bot.send_message(
-                            chat_id,
-                            caption,
-                            parse_mode="Markdown",
-                            reply_markup=inline_markup
-                        )
+                    except Exception as img_err:
+                        logger.error(f"Image dispatch failed for product {product.get('id')}: {img_err}")
+                        bot.send_message(chat_id, caption, parse_mode="Markdown", reply_markup=inline_markup)
                 else:
-                    bot.send_message(
-                        chat_id,
-                        caption,
-                        parse_mode="Markdown",
-                        reply_markup=inline_markup
-                    )
+                    bot.send_message(chat_id, caption, parse_mode="Markdown", reply_markup=inline_markup)
 
         elif text == "📞 እኛን ለማግኘት":
             bot.send_message(
@@ -143,14 +144,17 @@ def register_handlers(bot):
             )
 
         elif text == "🛍️ የእኔ ትዕዛዞች":
-            # Get user from database
             user = db.get_user(telegram_id)
             if not user:
                 bot.send_message(chat_id, "⚠️ እባክዎ መጀመሪያ /start ይጫኑ።")
                 return
 
-            # Get user orders from PostgreSQL
-            orders = db.get_orders(user_id=user['id'])
+            try:
+                orders = db.get_orders(user_id=user['id'])
+            except Exception as e:
+                logger.error(f"Error extracting tracking context for user {user['id']}: {e}")
+                bot.send_message(chat_id, "❌ የትዕዛዝ መዝገቦችን ማምጣት አልተሳካም።")
+                return
 
             if not orders:
                 bot.send_message(chat_id, "📦 በአሁኑ ሰዓት ምንም አይነት ያላጠናቀቁት ትዕዛዝ የለም።")
@@ -158,19 +162,19 @@ def register_handlers(bot):
 
             bot.send_message(chat_id, "🛍️ **የእርስዎ የትዕዛዞች ዝርዝር፦**", parse_mode="Markdown")
             for order in orders:
-                # Translate status to Amharic
                 status_map = {
                     'pending': '⏱️ ይጠበቃል',
                     'confirmed': '✅ ተረጋግጧል',
                     'shipped': '🚚 ተልኳል',
-                    'delivered': '📦 ተልኳል / ተጠናቋል',
+                    'delivered': '📦 ተጠናቋል',
                     'cancelled': '❌ ተሰርዟል'
                 }
-                status_display = status_map.get(order['order_status'], order['order_status'])
+                status_display = status_map.get(order.get('order_status'), "ያልታወቀ ሁኔታ")
+                order_id_short = str(order.get('id', ''))[:8]  # Explicit string conversion safeguards tracking arrays
 
                 order_text = (
-                    f"🆔 **የትዕዛዝ ቁጥር:** #{order['id'][:8]}\n"
-                    f"💰 **ጠቅላላ ዋጋ:** {order['total_amount']} ETB (ብር)\n"
+                    f"🆔 **የትዕዛዝ ቁጥር:** #{order_id_short}\n"
+                    f"💰 **ጠቅላላ ዋጋ:** {order.get('total_amount', 0)} ETB (ብር)\n"
                     f"🚦 **ሁኔታ:** {status_display}"
                 )
                 bot.send_message(chat_id, order_text, parse_mode="Markdown")
@@ -182,7 +186,6 @@ def register_handlers(bot):
         product_id = call.data.replace("product_", "")
         bot.answer_callback_query(call.id)
 
-        # Get product details
         product = db.get_product(product_id)
         if not product:
             bot.send_message(chat_id, "⚠️ ምርቱ አልተገኘም።")
@@ -193,7 +196,6 @@ def register_handlers(bot):
             bot.send_message(chat_id, "⚠️ ምርቱ ለሽያጭ ዝግጁ አይደለም።")
             return
 
-        # Send size selection
         available_sizes = sorted(set(v['size'] for v in variants if v.get('stock', 0) > 0))
         if not available_sizes:
             bot.send_message(chat_id, "⚠️ ምርቱ አሁን በስቶክ ውስጥ የለም።")
@@ -201,7 +203,7 @@ def register_handlers(bot):
 
         bot.send_message(
             chat_id,
-            f"📐 ለ **{product['name']}** የሚፈልጉትን ሳይዝ ይምረጡ፦",
+            f"📐 ለ **{product.get('name', 'ጫማ')}** የሚፈልጉትን ሳይዝ ይምረጡ፦",
             parse_mode="Markdown",
             reply_markup=keyboards.get_size_selection_keyboard(product_id, available_sizes)
         )
@@ -210,8 +212,18 @@ def register_handlers(bot):
     def handle_size_selection(call):
         chat_id = call.message.chat.id
         parts = call.data.split("_")
+        
+        if len(parts) < 3:
+            bot.answer_callback_query(call.id, "⚠️ የተሳሳተ የመረጃ ቅርጸት ገብቷል።")
+            return
+
         product_id = parts[1]
-        size = int(parts[2])
+        try:
+            size = int(parts[2])
+        except ValueError:
+            bot.answer_callback_query(call.id, "⚠️ የተሳሳተ ሳይዝ ተመርጧል።")
+            return
+
         bot.answer_callback_query(call.id)
 
         product = db.get_product(product_id)
@@ -226,7 +238,6 @@ def register_handlers(bot):
             bot.send_message(chat_id, f"⚠️ ሳይዝ {size} በስቶክ ውስጥ የለም።")
             return
 
-        # Send color selection
         available_colors = [v['color'] for v in matching_variants]
         bot.send_message(
             chat_id,
@@ -238,19 +249,31 @@ def register_handlers(bot):
     def handle_color_selection(call):
         chat_id = call.message.chat.id
         parts = call.data.split("_")
+
+        if len(parts) < 4:
+            bot.answer_callback_query(call.id, "⚠️ የተሳሳተ የመረጃ ቅርጸት ገብቷል።")
+            return
+
         product_id = parts[1]
-        size = int(parts[2])
-        color = "_".join(parts[3:])  # In case color has underscores
+        try:
+            size = int(parts[2])
+        except ValueError:
+            bot.answer_callback_query(call.id, "⚠️ ስህተት ተከስቷል።")
+            return
+
+        color = "_".join(parts[3:])  # Safely handle compound naming structures
         bot.answer_callback_query(call.id)
 
-        # Get user
         user = db.get_user(call.from_user.id)
         if not user:
             bot.send_message(chat_id, "⚠️ እባክዎ መጀመሪያ /start ይጫኑ።")
             return
 
-        # Get variant with matching size and color
         product = db.get_product(product_id)
+        if not product:
+            bot.send_message(chat_id, "⚠️ ምርቱ አልተገኘም።")
+            return
+
         variants = product.get('product_variants', [])
         variant = next((v for v in variants if v['size'] == size and v['color'] == color), None)
 
@@ -258,21 +281,22 @@ def register_handlers(bot):
             bot.send_message(chat_id, "⚠️ ይህ ምርት አሁን በስቶክ ውስጥ የለም።")
             return
 
-        # Add to cart
-        cart_item = db.add_to_cart(user['id'], variant['id'], quantity=1)
+        try:
+            cart_item = db.add_to_cart(user['id'], variant['id'], quantity=1)
+            if cart_item:
+                bot.send_message(
+                    chat_id,
+                    f"✅ **{product.get('name', 'ምርት')}** ({size}, {color}) ወደ ጋሪዎ በተሳካ ሁኔታ ተጨምሯል!\n\n"
+                    f"💵 ዋጋ: {product.get('base_price', 0)} ETB (ብር)\n\n"
+                    f"🛒 ጋሪዎን ለማየት /cart ይጫኑ ወይም ሌሎች ምርቶችን ይመልከቱ።",
+                    parse_mode="Markdown"
+                )
+            else:
+                bot.send_message(chat_id, "⚠️ ወደ ጋሪ መጨመር አልተሳካም።")
+        except Exception as e:
+            logger.error(f"Failed handling cart transaction sequence: {e}")
+            bot.send_message(chat_id, "❌ ምርቱን ወደ ጋሪ መጫን አልተሳካም።")
 
-        if cart_item:
-            bot.send_message(
-                chat_id,
-                f"✅ **{product['name']}** ({size}, {color}) ወደ ጋሪዎ ታች ተጨምሯል!\n\n"
-                f"💵 ዋጋ: {product['base_price']} ETB (ብር)\n\n"
-                f"🛒 ዘንድ ለመሄድ /cart ይጫኑ ወይም ሌሎች ምርቶችን ይመልከቱ።",
-                parse_mode="Markdown"
-            )
-        else:
-            bot.send_message(chat_id, "⚠️ ወደ ጋሪ መጨመር አልተሳካም።")
-
-    # Cart commands
     @bot.message_handler(commands=['cart'])
     def show_cart(message):
         chat_id = message.chat.id
@@ -282,7 +306,12 @@ def register_handlers(bot):
             bot.send_message(chat_id, "⚠️ እባክዎ መጀመሪያ /start ይጫኑ።")
             return
 
-        cart_items = db.get_cart_items(user['id'])
+        try:
+            cart_items = db.get_cart_items(user['id'])
+        except Exception as e:
+            logger.error(f"Cart acquisition transaction exception raised: {e}")
+            bot.send_message(chat_id, "❌ የጋሪ መረጃዎችን ማምጣት አልተሳካም።")
+            return
 
         if not cart_items:
             bot.send_message(chat_id, "🛒 ጋሪዎ ባዶ ነው።")
@@ -292,20 +321,21 @@ def register_handlers(bot):
         cart_text = "🛒 **የእርስዎ ጋሪ፦**\n\n"
 
         for item in cart_items:
-            variant = item['product_variants']
-            product = variant['products']
-            quantity = item['quantity']
-            price = product['base_price']
+            variant = item.get('product_variants', {})
+            product = variant.get('products', {}) if variant else {}
+            quantity = item.get('quantity', 1)
+            price = product.get('base_price', 0) if product else 0
             subtotal = price * quantity
             total += subtotal
 
-            cart_text += (
-                f"👟 **{product['name']}**\n"
-                f"   📐 Size: {variant['size']}\n"
-                f"   🎨 Color: {variant['color']}\n"
-                f"   📦 Qty: {quantity}\n"
-                f"   💵 {subtotal} ETB (ብር)\n\n"
-            )
+            if product:
+                cart_text += (
+                    f"👟 **{product.get('name', 'ጫማ')}**\n"
+                    f"   📐 Size: {variant.get('size', 'N/A')}\n"
+                    f"   🎨 Color: {variant.get('color', 'N/A')}\n"
+                    f"   📦 Qty: {quantity}\n"
+                    f"   💵 {subtotal} ETB (ብር)\n\n"
+                )
 
         cart_text += f"💰 **ጠቅላላ: {total} ETB (ብር)**"
 
@@ -316,23 +346,30 @@ def register_handlers(bot):
             reply_markup=keyboards.get_cart_checkout_keyboard()
         )
 
-    # Admin view orders
     @bot.callback_query_handler(func=lambda call: call.data == "admin_view_orders")
     def admin_view_orders(call):
+        telegram_id = call.from_user.id
         chat_id = call.message.chat.id
-        if chat_id not in ADMIN_IDS:
+
+        if telegram_id not in ADMIN_IDS:  # Patched secure authorization barrier
             bot.answer_callback_query(call.id, text="እርምጃው አልተፈቀደም!", show_alert=True)
             return
 
         bot.answer_callback_query(call.id)
-        orders = db.get_orders(status='pending')
+
+        try:
+            orders = db.get_orders(status='pending')
+        except Exception as e:
+            logger.error(f"Admin runtime error when scanning operations arrays: {e}")
+            bot.send_message(chat_id, "❌ አዳዲስ ትዕዛዞችን ማምጣት አልተሳካም።")
+            return
 
         if not orders:
             bot.send_message(chat_id, "📭 በአሁኑ ሰዓት ምንም አዲስ ትዕዛዝ የለም።")
             return
 
         bot.send_message(chat_id, "📦 **የገቡ አዳዲስ ትዕዛዞች ዝርዝር፦**", parse_mode="Markdown")
-        for order in orders[:10]:  # Show first 10
+        for order in orders[:10]:
             user = order.get('users', {})
             user_name = user.get('first_name', 'Unknown') if user else 'Unknown'
 
@@ -343,13 +380,14 @@ def register_handlers(bot):
                 'delivered': '📦 ተጠናቋል',
                 'cancelled': '❌ ተሰርዟል'
             }
-            status_display = status_map.get(order['order_status'], order['order_status'])
+            status_display = status_map.get(order.get('order_status'), order.get('order_status', 'N/A'))
+            order_id_short = str(order.get('id', ''))[:8]
 
             order_text = (
-                f"🆔 **ትዕዛዝ ID:** #{order['id'][:8]}\n"
+                f"🆔 **ትዕዛዝ ID:** #{order_id_short}\n"
                 f"👤 **ደንበኛ:** {user_name}\n"
-                f"📞 **ስልክ:** {order['contact_phone']}\n"
-                f"💰 **ጠቅላላ:** {order['total_amount']} ETB\n"
+                f"📞 **ስልክ:** {order.get('contact_phone', 'ያልተሰጠ')}\n"
+                f"💰 **ጠቅላላ:** {order.get('total_amount', 0)} ETB\n"
                 f"🚦 **ሁኔታ:** {status_display}"
             )
             bot.send_message(chat_id, order_text, parse_mode="Markdown")
