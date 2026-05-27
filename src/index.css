@@ -1,0 +1,134 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+body {
+  margin: 0;
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Roboto', 'Oxygen',
+    'Ubuntu', 'Cantarell', 'Fira Sans', 'Droid Sans', 'Helvetica Neue',
+    sans-serif;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+/* High contrast design system */
+:root {
+  --primary: #1a202c;
+  --secondary: #2d3748;
+  --accent: #3182ce;
+  --success: #25855a;
+  --warning: #d69e2e;
+  --error: #c53030;
+  --text-primary: #1a202c;
+  --text-secondary: #4a5568;
+  --bg-light: #f7fafc;
+  --bg-white: #ffffff;
+}
+
+/* Ensure readable text on all backgrounds */
+.text-readable {
+  color: var(--text-primary);
+  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.1);
+}
+
+/* Card styling with proper contrast */
+.card {
+  background: var(--bg-white);
+  border-radius: 0.5rem;
+  box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+  padding: 1.5rem;
+}
+
+/* Button variants with high contrast */
+.btn-primary {
+  background-color: #1a202c;
+  color: #ffffff;
+  font-weight: 600;
+  padding: 0.75rem 1.5rem;
+  border-radius: 0.5rem;
+  transition: all 0.2s;
+}
+
+.btn-primary:hover {
+  background-color: #2d3748;
+  transform: translateY(-1px);
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+}
+
+.btn-accent {
+  background-color: #3182ce;
+  color: #ffffff;
+  font-weight: 600;
+  padding: 0.75rem 1.5rem;
+  border-radius: 0.5rem;
+  transition: all 0.2s;
+}
+
+.btn-accent:hover {
+  background-color: #2c5282;
+  transform: translateY(-1px);
+}
+
+.btn-success {
+  background-color: #25855a;
+  color: #ffffff;
+  font-weight: 600;
+  padding: 0.75rem 1.5rem;
+  border-radius: 0.5rem;
+  transition: all 0.2s;
+}
+
+.btn-success:hover {
+  background-color: #1f7150;
+}
+
+/* ETB Currency styling */
+.etb-price {
+  font-weight: 700;
+  color: #1a202c;
+}
+
+.etb-price::after {
+  content: ' ETB (ብር)';
+  font-size: 0.875rem;
+  margin-left: 0.25rem;
+}
+
+/* Product card grid */
+.product-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+  gap: 1.5rem;
+  padding: 1rem;
+}
+
+/* Status badges with high contrast */
+.status-pending {
+  background-color: #fef5e7;
+  color: #975a16;
+  border: 1px solid #ecc94b;
+}
+
+.status-confirmed {
+  background-color: #e6fffa;
+  color: #234e52;
+  border: 1px solid #38b2ac;
+}
+
+.status-shipped {
+  background-color: #ebf8ff;
+  color: #2a4365;
+  border: 1px solid #4299e1;
+}
+
+.status-delivered {
+  background-color: #f0fff4;
+  color: #22543d;
+  border: 1px solid #48bb78;
+}
+
+.status-cancelled {
+  background-color: #fff5f5;
+  color: #742a2a;
+  border: 1px solid #f56565;
+}
