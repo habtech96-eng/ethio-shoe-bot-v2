@@ -16,7 +16,7 @@ def get_category_menu():
     btn1 = types.KeyboardButton("👞 የወንዶች ጫማዎች")
     btn2 = types.KeyboardButton("👠 የሴቶች ጫማዎች")
     btn3 = types.KeyboardButton("👟 የህፃናት ጫማዎች")
-    btn4 = types.KeyboardButton("👥 የሁለቱም/Unisex")
+    btn4 = types.KeyboardButton("👥 የሁለቱም")
     btn5 = types.KeyboardButton("🔄 ወደ ዋና ማውጫ")
     markup.add(btn1, btn2)
     markup.add(btn3, btn4)
@@ -26,7 +26,7 @@ def get_category_menu():
 # 🛍️ የእያንዳንዱ ምርት መግዣ በተን (Inline Button)
 def get_buy_inline_keyboard(product_id):
     inline_markup = types.InlineKeyboardMarkup()
-    buy_btn = types.InlineKeyboardButton("🛍️ አሁኑኑ እዘዝ", callback_data=f"buy_{product_id}")
+    buy_btn = types.InlineKeyboardButton("🛍️ አሁኑኑ ይዘዙ", callback_data=f"buy_{product_id}")
     inline_markup.add(buy_btn)
     return inline_markup
 

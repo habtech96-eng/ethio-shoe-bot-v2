@@ -1,7 +1,6 @@
-# handlers.py
 from config import ADMIN_IDS
 import keyboards
-import database # 👈 ዳታቤዙን አስገባን
+import database 
 
 def register_handlers(bot):
     
@@ -33,19 +32,15 @@ def register_handlers(bot):
             
         elif text in ["👞 የወንዶች ጫማዎች", "👠 የሴቶች ጫማዎች"]:
             category = "የወንዶች" if "የወንዶች" in text else "የሴቶች"
-            # 💾 ከዳታቤዝ ማውጫ
             filtered_products = database.get_products_by_category(category)
             
             if not filtered_products:
                 bot.send_message(chat_id, f"⚠️ በአሁኑ ሰዓት በ '{category}' ምድብ ስር ምንም ምርት የለም።")
                 return
 
-            # handlers.py (የምርት ማሳያ ሉፕ ማሻሻያ)
-
             for p in filtered_products:
                 caption = f"👟 **{p['name']}**\n\n💵 **ዋጋ፦** {p['price']} ብር\n📐 **ያለው ሳይዝ፦** {p['size']}\n📦 **በስቶክ ያለው ብዛት፦** {p['stock']} ጥንድ"
                 
-                # 🖼️ ፎቶ ካለው በ send_photo፣ ከሌለው በ send_message ያሳያል
                 if p.get('photo'):
                     bot.send_photo(
                         chat_id, 
@@ -55,9 +50,10 @@ def register_handlers(bot):
                         reply_markup=keyboards.get_buy_inline_keyboard(p['id'])
                     )
                 else:
+                    # 🛠️ እዚህ ላይ የነበረው ስህተት ተስተካክሏል (caption ወደ text ተቀይሯል)
                     bot.send_message(
                         chat_id, 
-                        caption, 
+                        text=caption, 
                         parse_mode="Markdown", 
                         reply_markup=keyboards.get_buy_inline_keyboard(p['id'])
                     )
@@ -65,10 +61,7 @@ def register_handlers(bot):
         elif text == "📞 እኛን ለማግኘት":
             bot.send_message(chat_id, "📞 እኛን ለማግኘት በስልክ ቁጥር +2519XXXXXXXX መደወል ይችላሉ።")
             
-        # handlers.py (የ "🛍️ የእኔ ትዕዛዞች" ክፍል ማሻሻያ)
-
         elif text == "🛍️ የእኔ ትዕዛዞች":
-            # 💾 ከዳታቤዝ በ chat_id መፈለግ
             user_orders = database.get_user_orders(chat_id)
             
             if not user_orders:
@@ -77,15 +70,13 @@ def register_handlers(bot):
                 
             bot.send_message(chat_id, "🛍️ **የእርስዎ የትዕዛዞች ዝርዝር፦**")
             for o in user_orders:
-                order_text = f"🆔 **የትዕዛዝ ቁጥር:** #{o['order_id']}\n👟 **ምርት:** {o['product_name']}\n🚦 **ሁኔታ:** {o['status']}"
+                order_text = f"🆔 **የትዕዛዝ ቁጥር:** #{o['order_id']}\n🚦 **ሁኔታ:** {o['status']}"
                 bot.send_message(chat_id, order_text, parse_mode="Markdown")
 
-    # 🛍️ የኢንላይን በተኖች ንክኪ (Callback Query)
     @bot.callback_query_handler(func=lambda call: True)
     def handle_callback(call):
         chat_id = call.message.chat.id
         
-        # የአድሚን ትዕዛዞችን ማሳያ በተን
         if call.data == "admin_view_orders":
             if chat_id in ADMIN_IDS:
                 bot.answer_callback_query(call.id)
@@ -96,7 +87,7 @@ def register_handlers(bot):
                 
                 bot.send_message(chat_id, "📦 **የገቡ አዳዲስ ትዕዛዞች ዝርዝር፦**")
                 for o in orders:
-                    order_text = f"🆔 **ትዕዛዝ ID:** #{o['order_id']}\n👤 **ደንበኛ:** {o['user_name']}\n👟 **ምርት:** {o['product_name']}\n📞 **ስልክ:** {o['phone']}\n🚦 **ሁኔታ:** {o['status']}"
+                    order_text = f"🆔 **ትዕዛዝ ID:** #{o['order_id']}\n👤 **ደንበኛ:** {o['user_name']}\n📞 **ስልክ:** {o['phone']}\n🚦 **ሁኔታ:** {o['status']}"
                     bot.send_message(chat_id, order_text, parse_mode="Markdown")
             else:
                 bot.answer_callback_query(call.id, text="እርምጃው አልተፈቀደም!", show_alert=True)

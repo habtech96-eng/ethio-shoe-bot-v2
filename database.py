@@ -1,102 +1,85 @@
-# database.py
-import sqlite3
-import subprocess
 import os
+from supabase import create_client, Client
+from dotenv import load_dotenv
+import logging
 
-DB_NAME = "shoe_store.db"
+load_dotenv()
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
-def backup_to_github():
+# Supabase Configuration (ከ .env ፋይል ውስጥ ያነባል)
+SUPABASE_URL = os.getenv('VITE_SUPABASE_URL')
+SUPABASE_KEY = os.getenv('VITE_SUPABASE_ANON_KEY')
+
+if not SUPABASE_URL or not SUPABASE_KEY:
+    raise ValueError("Missing Supabase configuration. Check .env file")
+
+supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
+
+# ============================================================
+# Telegram Bot የሚፈልጋቸው ፈንክሽኖች (ከዳሽቦርዱ ሰንጠረዥ ጋር የተናበቡ)
+# ============================================================
+
+def get_products_by_category(category_name):
+    """ምርቶችን ከነ ሳይዛቸው እና ዋጋቸው ከ Supabase ያወጣል"""
     try:
-        subprocess.run(["git", "config", "user.name", "Render Bot"], check=True)
-        subprocess.run(["git", "config", "user.email", "bot@render.com"], check=True)
-        subprocess.run(["git", "add", DB_NAME], check=True)
-        subprocess.run(["git", "commit", "-m", "🔄 Auto-backup database [skip ci]"], check=True)
-        subprocess.run(["git", "push", "origin", "main"], check=True)
-        print("✅ ዳታቤዙ በተሳካ ሁኔታ ወደ GitHub ተገፍቷል!")
+        # በምድብ (Category) መሰረት ምርቶችን መፈለግ
+        result = supabase.table('products').select('*, product_variants(*)').eq('category', category_name).eq('is_active', True).execute()
+        
+        # ቦቱ በሚፈልገው ፎርማት (Dict) አዘጋጅቶ መመለስ
+        formatted_products = []
+        for p in result.data:
+            # ቫሪያንት (ሳይዝ እና ስቶክ) ካለው የመጀመሪያውን ይወስዳል
+            variants = p.get('product_variants', [])
+            size = variants[0].get('size', 'N/A') if variants else 'N/A'
+            stock = variants[0].get('stock', '0') if variants else '0'
+            photo = variants[0].get('image_url', None) if variants else None
+            
+            formatted_products.append({
+                'id': p['id'],
+                'name': p['name'],
+                'price': p['base_price'], # ዳታቤዝህ ላይ 'base_price' ስለሆነ
+                'size': size,
+                'stock': stock,
+                'photo': photo
+            })
+        return formatted_products
     except Exception as e:
-        print(f"⚠️ ወደ GitHub መግፋት አልተሳካም፦ {e}")
-
-def get_connection():
-    conn = sqlite3.connect(DB_NAME)
-    conn.row_factory = sqlite3.Row
-    return conn
-
-def init_db():
-    conn = get_connection()
-    cursor = conn.cursor()
-    
-    # 1. የምርቶች ሰንጠረዥ
-    cursor.execute("""
-        CREATE TABLE IF NOT EXISTS products (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            name TEXT NOT NULL,
-            category TEXT NOT NULL,
-            price TEXT NOT NULL,
-            size TEXT NOT NULL,
-            photo TEXT, 
-            stock TEXT DEFAULT '10'
-        )
-    """)
-    
-    # 2. የትዕዛዞች ሰንጠረዥ (ለአዲሱ ፍሰት እንዲመች ተደርጎ የተስተካከለ)
-    cursor.execute("""
-        CREATE TABLE IF NOT EXISTS orders (
-            order_id INTEGER PRIMARY KEY AUTOINCREMENT,
-            user_name TEXT NOT NULL,
-            chat_id INTEGER NOT NULL,
-            product_name TEXT NOT NULL,
-            phone TEXT NOT NULL,
-            price TEXT,
-            size TEXT,
-            status TEXT DEFAULT '⏱️ ይጠበቃል'
-        )
-    """)
-    
-    conn.commit()
-    conn.close()
-
-def add_product(name, category, price, size, photo_id):
-    conn = get_connection()
-    cursor = conn.cursor()
-    cursor.execute(
-        "INSERT INTO products (name, category, price, size, photo) VALUES (?, ?, ?, ?, ?)",
-        (name, category, price, size, photo_id)
-    )
-    conn.commit()
-    conn.close()
-    backup_to_github()
-
-def add_order(user_name, chat_id, product_name, phone, price=None, size=None):
-    conn = get_connection()
-    cursor = conn.cursor()
-    cursor.execute(
-        "INSERT INTO orders (user_name, chat_id, product_name, phone, price, size) VALUES (?, ?, ?, ?, ?, ?)",
-        (user_name, chat_id, product_name, phone, price, size)
-    )
-    conn.commit()
-    conn.close()
-    backup_to_github()
-
-def get_products_by_category(category):
-    conn = get_connection()
-    cursor = conn.cursor()
-    cursor.execute("SELECT * FROM products WHERE category = ?", (category,))
-    rows = cursor.fetchall()
-    conn.close()
-    return [dict(row) for row in rows]
-
-def get_all_orders():
-    conn = get_connection()
-    cursor = conn.cursor()
-    cursor.execute("SELECT * FROM orders")
-    rows = cursor.fetchall()
-    conn.close()
-    return [dict(row) for row in rows]
+        logger.error(f"Error fetching products: {e}")
+        return []
 
 def get_user_orders(chat_id):
-    conn = get_connection()
-    cursor = conn.cursor()
-    cursor.execute("SELECT * FROM orders WHERE chat_id = ?", (chat_id,))
-    rows = cursor.fetchall()
-    conn.close()
-    return [dict(row) for row in rows]
+    """የአንድን ደንበኛ ትዕዛዞች ከ Supabase ያወጣል"""
+    try:
+        # መጀመሪያ ተጠቃሚውን በ Telegram ID እንፈልገዋለን
+        user_res = supabase.table('users').select('id').eq('telegram_id', chat_id).execute()
+        if not user_res.data:
+            return []
+        
+        user_uuid = user_res.data[0]['id']
+        # ትዕዛዞቹን መፈለግ
+        result = supabase.table('orders').select('*').eq('user_id', user_uuid).execute()
+        
+        return [{
+            'order_id': o['id'][:8], # UUID ውን አሳጥሮ ለማሳየት
+            'product_name': "ጫማ (የታዘዘ)", # እንደ አስፈላጊነቱ ማስተካከል ይቻላል
+            'status': o['order_status']
+        } for o in result.data]
+    except Exception as e:
+        logger.error(f"Error fetching user orders: {e}")
+        return []
+
+def get_all_orders():
+    """ሁሉንም የገቡ ትዕዛዞች ለአድሚን ያሳያል"""
+    try:
+        result = supabase.table('orders').select('*, users(*)').execute()
+        return [{
+            'order_id': o['id'][:8],
+            'user_name': o['users']['first_name'] if o.get('users') else "Unknown",
+            'product_name': "ጫማ",
+            'phone': o['contact_phone'],
+            'status': o['order_status']
+        } for o in result.data]
+    except Exception as e:
+        logger.error(f"Error fetching all orders: {e}")
+        return []
