@@ -15,6 +15,10 @@ print("🚀 Initializing Ethio Shoe Store Bot with PostgreSQL backend...")
 # 1. ቦቱን ማዘጋጀት
 state_storage = StateMemoryStorage()
 bot = telebot.TeleBot(BOT_TOKEN, state_storage=state_storage)
+
+# ይህንን መስመር ጨምር
+bot.remove_webhook() 
+
 bot.add_custom_filter(telebot.custom_filters.StateFilter(bot))
 
 # 2. Register all handlers
@@ -36,7 +40,7 @@ def run_flask():
 # ⏰ ቦቱ እንዳይተኛ ራሱን በየ 14 ደቂቃው የሚቀሰቅስ ፈንክሽን
 def keep_alive():
     # ያንተ የቦት ሊንክ
-    url = "https://my-shoe-store-bot-7k49.onrender.com" 
+    url = "https://ethio-shoe-bot-v2.onrender.com" 
     
     time.sleep(30) # ሰርቨሩ መጀመሪያ ሙሉ በሙሉ እስኪነሳ ትንሽ ይጠብቅ
     while True:
