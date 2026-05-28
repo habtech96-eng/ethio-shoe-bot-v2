@@ -1,132 +1,203 @@
 @import "tailwindcss";
 
+/* ============================================================
+   ETIO SHOE STORE - PREMIUM CSS v1.0
+   Tailwind CSS v4 Compatible
+   ============================================================ */
+
+/* Telegram CSS Variables */
+:root {
+  --tg-theme-bg-color: #ffffff;
+  --tg-theme-text-color: #1a202c;
+  --tg-theme-hint-color: #6b7280;
+  --tg-theme-link-color: #3182ce;
+  --tg-theme-button-color: #1a202c;
+  --tg-theme-button-text-color: #ffffff;
+  --tg-theme-secondary-bg-color: #f7fafc;
+  --tg-theme-error-color: #ef4444;
+  --tg-theme-success-color: #10b981;
+}
+
+/* Base Styles */
+* {
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+}
+
 body {
   margin: 0;
-  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Roboto', 'Oxygen',
-    'Ubuntu', 'Cantarell', 'Fira Sans', 'Droid Sans', 'Helvetica Neue',
-    sans-serif;
+  font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Display', 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, 'Helvetica Neue', sans-serif;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
+  background-color: var(--tg-theme-bg-color, #ffffff);
+  color: var(--tg-theme-text-color, #1a202c);
 }
 
-/* High contrast design system */
-:root {
-  --primary: #1a202c;
-  --secondary: #2d3748;
-  --accent: #3182ce;
-  --success: #25855a;
-  --warning: #d69e2e;
-  --error: #c53030;
-  --text-primary: #1a202c;
-  --text-secondary: #4a5568;
-  --bg-light: #f7fafc;
-  --bg-white: #ffffff;
+/* Safe Areas for Notched Devices */
+.safe-area-top {
+  padding-top: env(safe-area-inset-top, 0px);
 }
 
-/* Ensure readable text on all backgrounds */
-.text-readable {
-  color: var(--text-primary);
-  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.1);
+.safe-area-bottom {
+  padding-bottom: env(safe-area-inset-bottom, 0px);
 }
 
-/* Card styling with proper contrast */
-.card {
-  background: var(--bg-white);
-  border-radius: 0.5rem;
-  box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
-  padding: 1.5rem;
+/* Hide Scrollbar but Keep Functionality */
+.scrollbar-hide {
+  -ms-overflow-style: none;
+  scrollbar-width: none;
 }
 
-/* Button variants with high contrast */
-.btn-primary {
-  background-color: #1a202c;
-  color: #ffffff;
-  font-weight: 600;
-  padding: 0.75rem 1.5rem;
-  border-radius: 0.5rem;
-  transition: all 0.2s;
+.scrollbar-hide::-webkit-scrollbar {
+  display: none;
 }
 
-.btn-primary:hover {
-  background-color: #2d3748;
-  transform: translateY(-1px);
-  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+/* Smooth Animations */
+@keyframes slide-up {
+  from {
+    transform: translateY(100%);
+    opacity: 0;
+  }
+  to {
+    transform: translateY(0);
+    opacity: 1;
+  }
 }
 
-.btn-accent {
-  background-color: #3182ce;
-  color: #ffffff;
-  font-weight: 600;
-  padding: 0.75rem 1.5rem;
-  border-radius: 0.5rem;
-  transition: all 0.2s;
+.animate-slide-up {
+  animation: slide-up 0.3s ease-out;
 }
 
-.btn-accent:hover {
-  background-color: #2c5282;
-  transform: translateY(-1px);
+@keyframes fade-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
 }
 
-.btn-success {
-  background-color: #25855a;
-  color: #ffffff;
-  font-weight: 600;
-  padding: 0.75rem 1.5rem;
-  border-radius: 0.5rem;
-  transition: all 0.2s;
+.animate-fade-in {
+  animation: fade-in 0.2s ease-out;
 }
 
-.btn-success:hover {
-  background-color: #1f7150;
+/* Custom Focus Styles */
+*:focus {
+  outline: none;
 }
 
-/* ETB Currency styling */
-.etb-price {
-  font-weight: 700;
-  color: #1a202c;
+*:focus-visible {
+  outline: 2px solid var(--tg-theme-link-color, #3182ce);
+  outline-offset: 2px;
 }
 
-.etb-price::after {
-  content: ' ETB (ብር)';
-  font-size: 0.875rem;
-  margin-left: 0.25rem;
+/* Smooth Scrolling */
+html {
+  scroll-behavior: smooth;
 }
 
-/* Product card grid */
-.product-grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
-  gap: 1.5rem;
-  padding: 1rem;
+/* Optimized Touch */
+* {
+  -webkit-tap-highlight-color: transparent;
+  touch-action: manipulation;
 }
 
-/* Status badges with high contrast */
-.status-pending {
-  background-color: #fef5e7;
-  color: #975a16;
-  border: 1px solid #ecc94b;
+/* Image Optimization */
+img {
+  max-width: 100%;
+  height: auto;
+  display: block;
 }
 
-.status-confirmed {
-  background-color: #e6fffa;
-  color: #234e52;
-  border: 1px solid #38b2ac;
+/* Input Placeholder Styling */
+input::placeholder,
+textarea::placeholder {
+  color: var(--tg-theme-hint-color, #6b7280);
+  opacity: 1;
 }
 
-.status-shipped {
-  background-color: #ebf8ff;
-  color: #2a4365;
-  border: 1px solid #4299e1;
+/* Select Dropdown Styling */
+select {
+  cursor: pointer;
+  appearance: none;
+  background-image: url("data:image/svg+xml,%3csvg xmlns='http://www.w3.org/2000/svg' fill='none' viewBox='0 0 20 20'%3e%3cpath stroke='%236b7280' stroke-linecap='round' stroke-linejoin='round' stroke-width='1.5' d='M6 8l4 4 4-4'/%3e%3c/svg%3e");
+  background-position: right 0.75rem center;
+  background-repeat: no-repeat;
+  background-size: 1.5em 1.5em;
+  padding-right: 2.5rem;
 }
 
-.status-delivered {
-  background-color: #f0fff4;
-  color: #22543d;
-  border: 1px solid #48bb78;
+/* Premium Button Hover Effects */
+button {
+  transition: transform 0.15s ease-out, box-shadow 0.15s ease-out;
 }
 
-.status-cancelled {
-  background-color: #fff5f5;
-  color: #742a2a;
-  border: 1px solid #f56565;
+button:active {
+  transform: scale(0.98);
+}
+
+/* Loading Spinner Optimization */
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.animate-spin {
+  animation: spin 1s linear infinite;
+}
+
+/* Typography Optimization */
+.font-display {
+  font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Display', sans-serif;
+}
+
+/* Smooth Transitions for Interactive Elements */
+input,
+textarea,
+select,
+button {
+  transition: background-color 0.2s ease, border-color 0.2s ease, color 0.2s ease;
+}
+
+/* Prevent Text Selection on Interactive Elements */
+button,
+label {
+  user-select: none;
+}
+
+/* Currency Formatting */
+.currency-etb::before {
+  content: '';
+}
+
+/* Loading Shimmer Effect */
+@keyframes shimmer {
+  0% {
+    background-position: -1000px 0;
+  }
+  100% {
+    background-position: 1000px 0;
+  }
+}
+
+.shimmer {
+  animation: shimmer 2s infinite linear;
+  background: linear-gradient(90deg, #f0f0f0 0%, #e0e0e0 50%, #f0f0f0 100%);
+  background-size: 1000px 100%;
+}
+
+/* Responsive Image Containers */
+.aspect-square {
+  aspect-ratio: 1 / 1;
+}
+
+.aspect-video {
+  aspect-ratio: 16 / 9;
+}
+
+/* Prevent Layout Shift */
+img {
+  background-color: var(--tg-theme-secondary-bg-color, #f7fafc);
 }
