@@ -11,7 +11,7 @@
 
 **What Was Exposed:**
 ```
-BOT_TOKEN: 8651460654:AAG9S_BOfqvf0QhUupDCiMrXVc4yLdOj3Uw
+BOT_TOKEN: [REDACTED - ROTATE IMMEDIATELY VIA BOTFATHER]
 ```
 
 **Now Secured:**
@@ -27,7 +27,7 @@ const SUPABASE_URL = import.meta.env.VITE_SUPABASE_URL;
 const SUPABASE_ANON_KEY = import.meta.env.VITE_SUPABASE_ANON_KEY;
 
 // ❌ REMOVED - Hardcoded credentials
-// BOT_TOKEN: '8651460654:AAG9S_BOfqvf0QhUupDCiMrXVc4yLdOj3Uw'
+// BOT_TOKEN: [REDACTED_ROTATE_IMMEDIATELY]
 ```
 
 ### ✅ Console Logs Audited

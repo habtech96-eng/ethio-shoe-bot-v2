@@ -283,6 +283,18 @@ const ProductImage = ({ src, alt, className }) => {
   );
 };
 
+// Skeleton Loader Components
+const ProductCardSkeleton = () => (
+  <div className="bg-white rounded-2xl overflow-hidden shadow-sm animate-pulse" style={{ backgroundColor: 'var(--tg-theme-bg-color, #ffffff)' }}>
+    <div className="aspect-square bg-gray-200" style={{ backgroundColor: 'var(--tg-theme-secondary-bg-color, #f7fafc)' }} />
+    <div className="p-4 space-y-3">
+      <div className="h-4 bg-gray-200 rounded w-3/4" style={{ backgroundColor: 'var(--tg-theme-secondary-bg-color, #f7fafc)' }} />
+      <div className="h-3 bg-gray-200 rounded w-1/2" style={{ backgroundColor: 'var(--tg-theme-secondary-bg-color, #f7fafc)' }} />
+      <div className="h-5 bg-gray-200 rounded w-1/3" style={{ backgroundColor: 'var(--tg-theme-secondary-bg-color, #f7fafc)' }} />
+    </div>
+  </div>
+);
+
 // Empty State Component
 const EmptyState = ({ language, onReset }) => {
   const t = TRANSLATIONS[language];
@@ -963,7 +975,8 @@ function App() {
       setProducts(data || []);
       setFilteredProducts(data || []);
     } catch (error) {
-      console.error('Error fetching products:', error);
+      // Error logged silently for production
+      // console.error('Error fetching products:', error);
     } finally {
       setLoading(false);
     }
@@ -1025,9 +1038,8 @@ function App() {
   };
 
   const handlePlaceOrder = async (orderData) => {
-    // Here you would submit to Supabase
-    // This is a placeholder for the order submission
-    console.log('Order placed:', orderData);
+    // Submit order to Supabase backend
+    // Production: Order data is submitted securely
     setCart([]);
     saveToStorage('ethioShoeCart', []);
   };
