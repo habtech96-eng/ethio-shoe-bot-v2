@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import { supabase } from './supabaseClient';
+import AdminGate from './AdminDashboard';
 import {
   ShoppingBag,
   Package,
@@ -921,6 +922,7 @@ function App() {
   const { tg, theme, haptic } = useTelegram();
   const [language, setLanguage] = useState('en');
   const [activeScreen, setActiveScreen] = useState('home');
+  const [showAdmin, setShowAdmin] = useState(false);
   const [products, setProducts] = useState([]);
   const [filteredProducts, setFilteredProducts] = useState([]);
   const [activeCategory, setActiveCategory] = useState(null);
@@ -1073,6 +1075,18 @@ function App() {
 
               <div className="flex items-center gap-2">
                 <LanguageToggle language={language} onToggle={setLanguage} />
+
+                {/* Secret Admin Access - Triple Click on Language Toggle */}
+                <button
+                  onClick={(e) => {
+                    if (e.detail === 3) { // Triple click to open admin
+                      setShowAdmin(true);
+                    }
+                  }}
+                  className="hidden"
+                  aria-label="Admin access"
+                />
+
                 <button
                   onClick={() => setActiveScreen('cart')}
                   className="relative p-2 rounded-full transition-all hover:scale-105"
@@ -1137,6 +1151,13 @@ function App() {
             )}
           </div>
         </>
+      )}
+
+      {/* Admin Dashboard - Hidden Route */}
+      {showAdmin && (
+        <div className="fixed inset-0 z-50">
+          <AdminGate onLogout={() => setShowAdmin(false)} />
+        </div>
       )}
 
       {/* Cart Screen */}
