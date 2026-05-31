@@ -11,7 +11,7 @@ import time
 import asyncio
 import logging
 from flask import Flask, jsonify
-from telebot import TeleBot
+from telebot import TeleBot, custom_filters
 from telebot.storage import StateMemoryStorage
 
 # Import configuration (validates env vars on load)
@@ -96,8 +96,8 @@ def initialize_bot():
         bot.remove_webhook()
         time.sleep(0.5)
 
-        # Add custom filters
-        bot.add_custom_filter(bot.custom_filters.StateFilter(bot))
+        # Add custom filters for state handling
+        bot.add_custom_filter(custom_filters.StateFilter(bot))
 
         # Register all handlers
         logger.info("📦 Registering bot handlers...")
