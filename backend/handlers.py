@@ -3,10 +3,21 @@ Bot handlers for Ethiopian Shoe Store
 Updated to use PostgreSQL/Supabase backend
 """
 
-from config import ADMIN_IDS
-import keyboards
-from backend.database import db
+import sys
+import os
 import logging
+
+# CRITICAL: Fix imports for Render deployment
+# Use relative imports within backend package
+from . import keyboards
+from . import database as db
+
+# Import config from parent directory
+try:
+    from config import ADMIN_IDS
+except ImportError:
+    sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    from config import ADMIN_IDS
 
 logger = logging.getLogger(__name__)
 

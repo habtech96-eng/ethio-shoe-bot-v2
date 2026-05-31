@@ -2,6 +2,7 @@
 Database connection and models for Ethiopian Shoe Store
 PostgreSQL backend using Supabase
 """
+import sys
 import os
 from typing import Optional, List, Dict, Any
 from datetime import datetime, timezone
@@ -9,19 +10,19 @@ from supabase import create_client, Client
 from dotenv import load_dotenv
 import logging
 
-# Load environment variables
+# CRITICAL: Load environment variables properly
 load_dotenv()
 
 # Initialize logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# Supabase configuration
-SUPABASE_URL = os.getenv('VITE_SUPABASE_URL')
-SUPABASE_KEY = os.getenv('VITE_SUPABASE_ANON_KEY')
+# Supabase configuration - support both variable naming conventions
+SUPABASE_URL = os.getenv('SUPABASE_URL') or os.getenv('VITE_SUPABASE_URL')
+SUPABASE_KEY = os.getenv('SUPABASE_KEY') or os.getenv('VITE_SUPABASE_ANON_KEY')
 
 if not SUPABASE_URL or not SUPABASE_KEY:
-    raise ValueError("Missing Supabase configuration. Check .env file")
+    raise ValueError("Missing Supabase configuration. Check environment variables")
 
 # Initialize Supabase client
 supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)

@@ -2,12 +2,23 @@
 Admin handlers for Ethiopian Shoe Store
 Full CRUD operations for products, variants, orders, and payments
 """
+import sys
+import os
+import logging
 import telebot
 from telebot.handler_backends import State, StatesGroup
 from telebot.types import InlineKeyboardMarkup, InlineKeyboardButton
-from config import ADMIN_IDS
-from backend.database import db
-import logging
+
+# CRITICAL: Fix imports for Render deployment
+# Use relative imports within backend package
+from . import database as db
+
+# Import config from parent directory
+try:
+    from config import ADMIN_IDS
+except ImportError:
+    sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    from config import ADMIN_IDS
 
 logger = logging.getLogger(__name__)
 
