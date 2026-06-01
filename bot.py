@@ -13,6 +13,7 @@ import logging
 from flask import Flask, jsonify
 from telebot import TeleBot, custom_filters
 from telebot.storage import StateMemoryStorage
+import telebot
 
 # Import configuration (validates env vars on load)
 from config import (
@@ -164,11 +165,11 @@ def start_polling_mode(bot):
     logger.info("✅ Polling mode activated")
 
 # ============================================================
-# SUPERVISION REAL-TIME ORDER MONITORING
+# SUPERVISION REAL-TIME ORDER MONITORING (FIXED SCHEMA)
 # ============================================================
 
 class OrderMonitor:
-    """Monitor Supabase for new orders in real-time."""
+    """Monitor Supabase for new orders in real-time with proper schema matching."""
 
     def __init__(self, bot):
         self.bot = bot
@@ -185,19 +186,19 @@ class OrderMonitor:
     def _monitor_loop(self):
         """Background thread monitoring for new orders."""
         import supabase
-        from datetime import datetime, timedelta
+        from datetime import datetime, timezone
 
         # Initialize Supabase client
         supa_client = supabase.create_client(SUPABASE_URL, SUPABASE_KEY)
 
-        # Track last check time
-        last_check = datetime.utcnow()
+        # Track last check time using ISO with Timezone (matching Supabase TIMESTAMPTZ)
+        last_check = datetime.now(timezone.utc)
 
         while self.running:
             try:
-                # Query for new orders created after last check
+                # Query schema matching public.orders and join public.users for first_name
                 result = supa_client.table('orders')\
-                    .select('*')\
+                    .select('*, users(first_name)')\
                     .gte('created_at', last_check.isoformat())\
                     .execute()
 
@@ -205,30 +206,34 @@ class OrderMonitor:
                     for order in result.data:
                         self._notify_new_order(order)
 
-                last_check = datetime.utcnow()
+                last_check = datetime.now(timezone.utc)
                 time.sleep(10)  # Check every 10 seconds
 
             except Exception as e:
-                logger.error(f"Order monitoring error: {e}")
+                logger.error(f"⚠️ Order monitoring query error: {e}")
                 time.sleep(30)
 
     def _notify_new_order(self, order):
-        """Send notification for new order."""
+        """Send notification for new order matching exact DB structure."""
         try:
             order_id = order.get('id', 'N/A')
-            customer_name = order.get('customer_name', 'Customer')
             total_amount = order.get('total_amount', 0)
-            phone = order.get('customer_phone', 'N/A')
+            phone = order.get('contact_phone', 'N/A')
+            status = order.get('order_status', 'pending')
+
+            # Extract user first_name from relational join metadata
+            user_data = order.get('users', {})
+            customer_name = user_data.get('first_name', 'ያልታወቀ ደንበኛ') if user_data else 'ያልታወቀ ደንበኛ'
 
             # Notify admins
             for admin_id in ADMIN_IDS:
                 message = (
-                    f"🔔 <b>New Order Received!</b>\n\n"
-                    f"Order ID: <code>{order_id}</code>\n"
-                    f"Customer: {customer_name}\n"
-                    f"Phone: {phone}\n"
-                    f"Total: {total_amount} ETB\n\n"
-                    f"Status: ⏱️ Pending"
+                    f"🔔 <b>አዲስ ትዕዛዝ ደርሷል! (New Order)</b>\n\n"
+                    f"<b>የማዘዣ ቁጥር (ID):</b> <code>{order_id}</code>\n"
+                    f"<b>ደንበኛ:</b> {customer_name}\n"
+                    f"<b>ስልክ ቁጥር:</b> {phone}\n"
+                    f"<b>ጠቅላላ ዋጋ:</b> {total_amount} ETB\n"
+                    f"<b>የሱቅ ሁኔታ (Status):</b> ⏱️ {status.capitalize()}"
                 )
 
                 self.bot.send_message(
@@ -240,7 +245,7 @@ class OrderMonitor:
             logger.info(f"📢 Notified admins of order {order_id}")
 
         except Exception as e:
-            logger.error(f"Failed to notify order: {e}")
+            logger.error(f"❌ Failed to parse or notify order: {e}")
 
 # ============================================================
 # MAIN ENTRY POINT
@@ -270,7 +275,6 @@ def main():
     # Try webhook mode, fallback to polling
     if WEBHOOK_URL:
         if start_webhook_mode(bot):
-            # Webhook is handled by Flask route
             logger.info("✅ Running in webhook mode")
         else:
             start_polling_mode(bot)
