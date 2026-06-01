@@ -21,6 +21,9 @@ except ImportError:
 
 logger = logging.getLogger(__name__)
 
+# አድሚኖች በተከታታይ መልዕክት ሲልኩ መደራረብን መከላከያ (Race Condition Lock)
+processing_admins = set()
+
 # ምርት እና የጫማ መጠን/ቀለም ለመጨመር የሚያገለግሉ የስቴት ደረጃዎች
 class AddProductStates(StatesGroup):
     waiting_for_name = State()
@@ -51,8 +54,9 @@ def register_admin_handlers(bot):
             return
         
         bot.answer_callback_query(call.id)
-        # አዲስ ለመጀመር የድሮውን ስቴት ማጽዳት
         bot.delete_state(chat_id)
+        if chat_id in processing_admins:
+            processing_admins.remove(chat_id)
         
         bot.send_message(chat_id, "👟 እባክዎ የጫማውን ሙሉ ስም (Model Name) ያስገቡ፦\n(ምሳሌ፦ Nike Air Jordan 4)")
         bot.set_state(chat_id, AddProductStates.waiting_for_name)
@@ -63,7 +67,7 @@ def register_admin_handlers(bot):
         chat_id = message.chat.id
         product_name = message.text.strip()
         
-        if len(product_name) < 2:
+        if len(product_name) < 2 or product_name.startswith('/') or product_name.isdigit():
             bot.send_message(chat_id, "⚠️ እባክዎ ትክክለኛ የጫማ ስም ያስገቡ፦")
             return
 
@@ -80,7 +84,7 @@ def register_admin_handlers(bot):
         bot.send_message(chat_id, "🗂️ እባክዎ ከታች ካሉት አዝራሮች የጫማውን የክፍል (Category) አይነት ይምረጡ፦", reply_markup=markup)
         bot.set_state(chat_id, AddProductStates.waiting_for_category)
 
-    # 🛡️ NAVIGATION GUARD ለ Category: አድሚኑ በተኑን ሳይጫን ፅሁፍ ቢልክ መከላከያ
+    # 🛡️ STERN NAVIGATION GUARD ለ Category: አድሚኑ በተኑን ሳይጫን ፅሁፍ ቢልክ ፍጹም አያሳልፍም
     @bot.message_handler(state=AddProductStates.waiting_for_category)
     def guard_category(message):
         chat_id = message.chat.id
@@ -109,7 +113,7 @@ def register_admin_handlers(bot):
         bot.edit_message_text(f"🗂️ የተመረጠው ክፍል፦ {category}\n\n🏷️ በመቀጠል እባክዎ የጫማውን ብራንድ (Brand) ይምረጡ፦", chat_id, call.message.message_id, reply_markup=markup)
         bot.set_state(chat_id, AddProductStates.waiting_for_brand)
 
-    # 🛡️ NAVIGATION GUARD ለ Brand: አድሚኑ በተኑን ሳይጫን ፅሁፍ ቢልክ መከላከያ
+    # 🛡️ STERN NAVIGATION GUARD ለ Brand: አድሚኑ በተኑን ሳይጫን ፅሁፍ ቢልክ ፍጹም አያሳልፍም
     @bot.message_handler(state=AddProductStates.waiting_for_brand)
     def guard_brand(message):
         chat_id = message.chat.id
@@ -170,30 +174,60 @@ def register_admin_handlers(bot):
     @bot.message_handler(state=AddProductStates.waiting_for_description)
     def process_description(message):
         chat_id = message.chat.id
+        
+        # 🛑 RACE CONDITION LOCK: በተከታታይ መልዕክት ሲላክ የመጀመሪያው ሳይያልቅ ሌላ እንዳይሰሩ መቆለፊያ
+        if chat_id in processing_admins:
+            return
+            
         description_text = message.text.strip()
+        
+        # አድሚኑ በስህተት የቦቱን ጥያቄ ኮፒ አድርጎ ከላከው ውድቅ ማድረግ
+        if "የተሰራበትን ማቴሪያል" in description_text and description_text.lower() != 'skip':
+            bot.send_message(chat_id, "⚠️ እባክዎ በትክክል የጫማውን መግለጫ ይጻፉ ወይም ለመዝለል 'skip' ብቻ ይበሉ፦")
+            return
+
         description = description_text if description_text.lower() != 'skip' else None
         
-        with bot.retrieve_data(chat_id) as data:
-            data['description'] = description
+        processing_admins.add(chat_id)
+        load_msg = bot.send_message(chat_id, "⏳ መረጃው ዳታቤዝ ላይ እየተጫነ ነው፣ እባክዎ ይጠብቁ...")
+
+        try:
+            with bot.retrieve_data(chat_id) as data:
+                # በዳታቤዝ ውስጥ ያሉትን ጥብቅ የ Check Constraints ለማሟላት የዳታ ማረጋገጫ
+                if not data.get('name') or not data.get('category') or not data.get('base_price'):
+                    raise ValueError("Missing core product attributes in state memory.")
+                
+                data['description'] = description
+                
+                # 🔄 ምርቱን ወደ Supabase PostgreSQL ማስገባት
+                product = db.add_product(
+                    name=data['name'],
+                    category=data['category'],
+                    base_price=data['base_price'],
+                    description=description,
+                    brand=data['brand'],
+                    original_price=data.get('original_price')
+                )
+                
+                bot.delete_message(chat_id, load_msg.message_id)
+                
+                if not product:
+                    bot.send_message(chat_id, "❌ ስህተት፦ የጫማውን መረጃ ዳታቤዝ ላይ መጫን አልተሳካም። እባክዎ ከመጀመሪያው ይጀምሩ።")
+                    bot.delete_state(chat_id)
+                    return
+                
+                data['product_id'] = product['id'] # የተመለሰውን UUID ማስቀመጥ
             
-            product = db.add_product(
-                name=data['name'],
-                category=data['category'],
-                base_price=data['base_price'],
-                description=description,
-                brand=data['brand'],
-                original_price=data.get('original_price')
-            )
+            bot.send_message(chat_id, "📐 አሁን ለጫማው ዝርዝር መረጃዎችን እናስገባ።\nየመጀመሪያውን የጫማ መጠን ቁጥር (Size) ያስገቡ (ከ 30 እስከ 50 መካከል)፦")
+            bot.set_state(chat_id, AddProductStates.waiting_for_variant_size)
             
-            if not product:
-                bot.send_message(chat_id, "❌ ስህተት፦ የጫማውን መረጃ ዳታቤዝ ላይ መጫን አልተሳካም። እባክዎ ከመጀመሪያው ይጀምሩ።")
-                bot.delete_state(chat_id)
-                return
-            
-            data['product_id'] = product['id']
-        
-        bot.send_message(chat_id, "📐 አሁን ለጫማው ዝርዝር መረጃዎችን እናስገባ።\nየመጀመሪያውን የጫማ መጠን ቁጥር (Size) ያስገቡ (ከ 30 እስከ 50 መካከል)፦")
-        bot.set_state(chat_id, AddProductStates.waiting_for_variant_size)
+        except Exception as e:
+            logger.error(f"Error in creating base product: {e}")
+            bot.send_message(chat_id, "❌ የዳታቤዝ ስህተት አጋጥሟል። እባክዎ እንደገና ይሞክሩ።")
+            bot.delete_state(chat_id)
+        finally:
+            if chat_id in processing_admins:
+                processing_admins.remove(chat_id)
 
     # 🎨 8. የጫማ መጠን ማረጋገጫ እና ቀለም ጥያቄ
     @bot.message_handler(state=AddProductStates.waiting_for_variant_size)
@@ -208,7 +242,7 @@ def register_admin_handlers(bot):
         with bot.retrieve_data(chat_id) as data:
             data['variant_size'] = int(size_text)
         
-        bot.send_message(chat_id, "🎨 የዚህን መጠን ጫማ ቀለም ያስገቡ (ምሳሌ፦ ጥቁር፣ ነጭ፣ ሰማያዊ)፦")
+        bot.send_message(chat_id, "🎨 የዚህን መጠን ጫማ ቀለም ያስገቡ (ምሳሌ፦ ጥቁር፣ ነጭ)፦")
         bot.set_state(chat_id, AddProductStates.waiting_for_variant_color)
 
     # 📦 9. የጫማ ቀለም መቀበያ እና የክምችት (Stock) ብዛት ጥያቄ
@@ -302,7 +336,7 @@ def register_admin_handlers(bot):
             return
         
         bot.answer_callback_query(call.id)
-        bot.delete_state(chat_id) # የድሮውን ስቴት አጽዳ
+        bot.delete_state(chat_id)
         
         product_id = call.data.replace("add_more_variants_", "")
         bot.set_state(chat_id, AddVariantStates.waiting_for_size)
