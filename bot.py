@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 Ethio Shoe Store - Telegram Bot (Render Deployment Ready)
-Main entry point with Flask health check and webhook support
+Main entry point with Flask health check, keep-alive ping, and webhook support
 """
 
 import os
@@ -10,6 +10,7 @@ import threading
 import time
 import asyncio
 import logging
+import requests
 from flask import Flask, jsonify
 from telebot import TeleBot, custom_filters
 from telebot.storage import StateMemoryStorage
@@ -40,18 +41,19 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 # ============================================================
-# FLASK APPLICATION (For Render Health Checks)
+# FLASK APPLICATION (For Render Health Checks & Keep-Alive)
 # ============================================================
 
 app = Flask(__name__)
 
 @app.route('/')
 def home():
-    """Root endpoint - basic health check."""
+    """Root endpoint - basic health check and keep alive target."""
     return jsonify({
         "status": "ok",
         "service": "Ethio Shoe Store Telegram Bot",
-        "version": "2.0.0"
+        "version": "2.0.0",
+        "message": "Bot is Running Live!"
     })
 
 @app.route('/health')
@@ -79,6 +81,30 @@ def run_flask():
     except Exception as e:
         logger.error(f"❌ Flask server error: {e}")
         sys.exit(1)
+
+# ============================================================
+# KEEP ALIVE LOGIC (እንዳይተኛ ራስን የመቀስቀሻ ሎጂክ)
+# ============================================================
+
+def keep_alive():
+    """Background task to ping the server every 14 minutes to prevent Render spin-down."""
+    # የዌብሁክ ሊንክ ካለ እሱን ይጠቀማል፣ ካልሆነ የተሰጠውን ዲፎልት ሊንክ ይወስዳል
+    url = WEBHOOK_URL.split('/webhook')[0] if WEBHOOK_URL else "https://my-shoe-store-bot-7k49.onrender.com"
+    
+    logger.info(f"⏰ Keep-alive monitor started targeting: {url}")
+    time.sleep(30)  # ሰርቨሩ ሙሉ በሙሉ እስኪነሳ መጀመሪያ ትንሽ ይጠብቅ
+    
+    while True:
+        try:
+            response = requests.get(url, timeout=10)
+            if response.status_code == 200:
+                logger.info("⏰ ሰርቨሩ እንዳይተኛ ራሱን ቀስቅሷል (Pinged Successfully)!")
+            else:
+                logger.warning(f"⏰ Keep-alive ping returned status code: {response.status_code}")
+        except Exception as e:
+            logger.error(f"⚠️ Ping ስህተት ገጥሟል፦ {e}")
+            
+        time.sleep(14 * 60)  # በየ 14 ደቂቃው (14 x 60 ሰከንድ) ይደጋገማል
 
 # ============================================================
 # TELEGRAM BOT INITIALIZATION
@@ -155,7 +181,7 @@ def start_polling_mode(bot):
     def poll():
         while True:
             try:
-                bot.infinity_polling(timeout=10, long_polling_timeout=5)
+                bot.infinity_polling(timeout=20, long_polling_timeout=10)
             except Exception as e:
                 logger.error(f"Polling error: {e}")
                 time.sleep(5)
@@ -165,7 +191,7 @@ def start_polling_mode(bot):
     logger.info("✅ Polling mode activated")
 
 # ============================================================
-# SUPERVISION REAL-TIME ORDER MONITORING (FIXED SCHEMA)
+# SUPERVISION REAL-TIME ORDER MONITORING (ALIGNED WITH SCHEMA)
 # ============================================================
 
 class OrderMonitor:
@@ -191,12 +217,12 @@ class OrderMonitor:
         # Initialize Supabase client
         supa_client = supabase.create_client(SUPABASE_URL, SUPABASE_KEY)
 
-        # Track last check time using ISO with Timezone (matching Supabase TIMESTAMPTZ)
+        # Track last check time using ISO with UTC timezone to match Supabase TIMESTAMPTZ
         last_check = datetime.now(timezone.utc)
 
         while self.running:
             try:
-                # Query schema matching public.orders and join public.users for first_name
+                # Query public.orders and relationally join public.users to get the first_name
                 result = supa_client.table('orders')\
                     .select('*, users(first_name)')\
                     .gte('created_at', last_check.isoformat())\
@@ -214,14 +240,14 @@ class OrderMonitor:
                 time.sleep(30)
 
     def _notify_new_order(self, order):
-        """Send notification for new order matching exact DB structure."""
+        """Send notification for new order matching exact public.orders DB structure."""
         try:
             order_id = order.get('id', 'N/A')
             total_amount = order.get('total_amount', 0)
             phone = order.get('contact_phone', 'N/A')
             status = order.get('order_status', 'pending')
 
-            # Extract user first_name from relational join metadata
+            # Extract user first_name via relational join metadata
             user_data = order.get('users', {})
             customer_name = user_data.get('first_name', 'ያልታወቀ ደንበኛ') if user_data else 'ያልታወቀ ደንበኛ'
 
@@ -264,6 +290,11 @@ def main():
     flask_thread = threading.Thread(target=run_flask, daemon=True)
     flask_thread.start()
     logger.info("✅ Flask server started")
+
+    # Start keep alive ping loop in background thread
+    keep_alive_thread = threading.Thread(target=keep_alive, daemon=True)
+    keep_alive_thread.start()
+    logger.info("✅ Keep-alive loop thread started")
 
     # Wait for Flask to start
     time.sleep(2)
