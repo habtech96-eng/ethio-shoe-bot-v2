@@ -89,7 +89,7 @@ def run_flask():
 def keep_alive():
     """Background task to ping the server every 14 minutes to prevent Render spin-down."""
     # የዌብሁክ ሊንክ ካለ እሱን ይጠቀማል፣ ካልሆነ የተሰጠውን ዲፎልት ሊንክ ይወስዳል
-    url = WEBHOOK_URL.split('/webhook')[0] if WEBHOOK_URL else "https://my-shoe-store-bot-7k49.onrender.com"
+    url = WEBHOOK_URL.split('/webhook')[0] if WEBHOOK_URL else "https://ethio-shoe-bot-v2.onrender.com"
     
     logger.info(f"⏰ Keep-alive monitor started targeting: {url}")
     time.sleep(30)  # ሰርቨሩ ሙሉ በሙሉ እስኪነሳ መጀመሪያ ትንሽ ይጠብቅ
