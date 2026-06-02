@@ -1,6 +1,7 @@
 """
 Database connection and models for Ethiopian Shoe Store
 PostgreSQL backend using Supabase
+Fully synchronized with the production SQL schema.
 """
 import os
 from typing import Optional, List, Dict, Any
@@ -28,7 +29,7 @@ supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 
 
 class DatabaseManager:
-    """Database manager for all shoe store operations"""
+    """Database manager for all shoe store operations matching the public schema"""
 
     def __init__(self):
         self.client = supabase
@@ -42,7 +43,7 @@ class DatabaseManager:
     # ============================================================
 
     def create_user(self, telegram_id: int, first_name: str, username: str = None, phone_number: str = None) -> Dict[str, Any]:
-        """Create a new user or get existing user"""
+        """Create a new user or get existing user based on telegram_id"""
         try:
             # Check if user exists
             existing = self.client.table('users').select('*').eq('telegram_id', telegram_id).execute()
@@ -97,19 +98,18 @@ class DatabaseManager:
 
     def add_address(self, user_id: str, city: str, subcity_or_zone: str = None,
                     specific_location: str = None, is_default: bool = False) -> Optional[Dict[str, Any]]:
-        """Add a new address for user (With City Validation)"""
+        """Add a new address for user (With Schema City Validation CHECK)"""
         try:
-            # CHECK Constraint Validation
+            # Schema CHECK Constraint Validation
             allowed_cities = ['Addis Ababa', 'Adama', 'Hawassa', 'Bahir Dar', 'Dire Dawa', 'Mekelle', 'Gondar', 'Jimma', 'Dessie', 'Shashamane']
             if city not in allowed_cities:
                 logger.error(f"Invalid city provided: {city}. Must be one of {allowed_cities}")
                 return None
 
-            # If setting as default, unset other defaults
+            # If setting as default, unset other defaults first
             if is_default:
                 self.client.table('user_addresses').update({'is_default': False}).eq('user_id', user_id).execute()
 
-            # FIXED: column name changed from specific_location to specific_location_or_woreda to match schema
             address_data = {
                 'user_id': user_id,
                 'city': city,
@@ -139,15 +139,15 @@ class DatabaseManager:
 
     def add_product(self, name: str, category: str, base_price: int, description: str = None,
                     brand: str = None, original_price: int = None) -> Optional[Dict[str, Any]]:
-        """Add a new product (With Category & Brand Validation)"""
+        """Add a new product (With Strict Category & Brand Schema Validation)"""
         try:
-            # Category Check
+            # Schema Category Check
             allowed_categories = ['የወንዶች', 'የሴቶች', 'የህፃናት', 'የሁለቱም/Unisex']
             if category not in allowed_categories:
                 logger.error(f"Invalid category: {category}")
                 return None
 
-            # Brand Check
+            # Schema Brand Check
             if brand and brand not in ['Nike', 'Adidas', 'Puma', 'Reebok', 'Jordan', 'Local', 'Other']:
                 logger.error(f"Invalid brand: {brand}")
                 return None
@@ -169,14 +169,14 @@ class DatabaseManager:
             return None
 
     def get_products_by_category(self, category: str) -> List[Dict[str, Any]]:
-        """Get all active products by category with variants"""
+        """Get all active products by schema category with variants included"""
         try:
             result = self.client.table('products').select(
                 '*, product_variants(*)'
             ).eq('category', category).eq('is_active', True).execute()
             return result.data if result.data else []
         except Exception as e:
-            logger.error(f"Error getting products: {e}")
+            logger.error(f"Error getting products by category ({category}): {e}")
             return []
 
     def get_all_products(self) -> List[Dict[str, Any]]:
@@ -228,11 +228,11 @@ class DatabaseManager:
 
     def add_product_variant(self, product_id: str, size: int, color: str,
                             stock: int = 0, image_url: str = None) -> Optional[Dict[str, Any]]:
-        """Add a product variant (size/color combination)"""
+        """Add a product variant (size/color combination with boundaries)"""
         try:
-            # Size Check Constraint
+            # Size Check Constraint from Schema (30 - 50)
             if size < 30 or size > 50:
-                logger.error(f"Size {size} out of boundary (30-50)")
+                logger.error(f"Size {size} out of schema boundary (30-50)")
                 return None
 
             variant_data = {
@@ -270,7 +270,7 @@ class DatabaseManager:
             return None
 
     def update_variant_stock(self, variant_id: str, stock: int) -> bool:
-        """Update stock for a variant"""
+        """Update stock for a variant ensuring constraint CHECK >= 0"""
         try:
             result = self.client.table('product_variants').update(
                 {'stock': max(0, stock), 'updated_at': self._get_current_time()}
@@ -286,13 +286,13 @@ class DatabaseManager:
     # ============================================================
 
     def add_to_cart(self, user_id: str, variant_id: str, quantity: int = 1) -> Optional[Dict[str, Any]]:
-        """Add item to cart"""
+        """Add item to cart or update existing quantity"""
         try:
             # Check if item already in cart
             existing = self.client.table('cart_items').select('*').eq('user_id', user_id).eq('variant_id', variant_id).execute()
 
             if existing.data:
-                # Update quantity
+                # Update quantity safely
                 new_quantity = existing.data[0]['quantity'] + quantity
                 result = self.client.table('cart_items').update(
                     {'quantity': new_quantity, 'updated_at': self._get_current_time()}
@@ -313,7 +313,7 @@ class DatabaseManager:
             return None
 
     def get_cart_items(self, user_id: str) -> List[Dict[str, Any]]:
-        """Get all cart items for a user with product details"""
+        """Get all cart items for a user with deep variant and product joins"""
         try:
             result = self.client.table('cart_items').select(
                 '*, product_variants(*, products(*))'
@@ -326,7 +326,7 @@ class DatabaseManager:
     def update_cart_item_quantity(self, cart_item_id: str, quantity: int) -> bool:
         """Update quantity of cart item"""
         try:
-            result = self.client.table('cart_items').update(
+            self.client.table('cart_items').update(
                 {'quantity': quantity, 'updated_at': self._get_current_time()}
             ).eq('id', cart_item_id).execute()
             return True
@@ -337,7 +337,7 @@ class DatabaseManager:
     def remove_from_cart(self, cart_item_id: str) -> bool:
         """Remove item from cart"""
         try:
-            result = self.client.table('cart_items').delete().eq('id', cart_item_id).execute()
+            self.client.table('cart_items').delete().eq('id', cart_item_id).execute()
             return True
         except Exception as e:
             logger.error(f"Error removing from cart: {e}")
@@ -346,7 +346,7 @@ class DatabaseManager:
     def clear_cart(self, user_id: str) -> bool:
         """Clear all items from user's cart"""
         try:
-            result = self.client.table('cart_items').delete().eq('user_id', user_id).execute()
+            self.client.table('cart_items').delete().eq('user_id', user_id).execute()
             logger.info(f"Cleared cart for user: {user_id}")
             return True
         except Exception as e:
@@ -358,7 +358,7 @@ class DatabaseManager:
     # ============================================================
 
     def validate_promo_code(self, code: str, order_amount: int) -> Optional[Dict[str, Any]]:
-        """Validate and get promo code details (FIXED Timezone Check)"""
+        """Validate and get promo code details with strict expiration handling"""
         try:
             result = self.client.table('promo_codes').select('*').eq('code', code).eq('is_active', True).execute()
 
@@ -367,17 +367,17 @@ class DatabaseManager:
 
             promo = result.data[0]
 
-            # FIXED: Handled ISO Expiration string parsing safely with UTC
+            # Parse timestamp securely
             if promo.get('expires_at'):
                 expires = datetime.fromisoformat(promo['expires_at'].replace('Z', '+00:00'))
                 if datetime.now(timezone.utc) > expires:
                     return None
 
-            # Check usage limit
+            # Check usage limit constraint
             if promo.get('max_uses') and promo['current_uses'] >= promo['max_uses']:
                 return None
 
-            # Check minimum order amount
+            # Check minimum order amount threshold
             if promo.get('min_order_amount', 0) > order_amount:
                 return None
 
@@ -387,7 +387,7 @@ class DatabaseManager:
             return None
 
     def apply_promo_code(self, promo_id: str) -> bool:
-        """Increment promo code usage"""
+        """Increment promo code current_uses count"""
         try:
             result = self.client.table('promo_codes').select('current_uses').eq('id', promo_id).execute()
             if result.data:
@@ -406,7 +406,7 @@ class DatabaseManager:
     def create_order(self, user_id: str, items: List[Dict[str, Any]], subtotal: int,
                      delivery_fee: int, discount_amount: int, total_amount: int,
                      shipping_address_id: str, contact_phone: str, promo_code_id: str = None) -> Optional[Dict[str, Any]]:
-        """Create a new order and reduce variants stock automatically"""
+        """Create a new order and reduce product variant stocks securely"""
         try:
             order_data = {
                 'user_id': user_id,
@@ -426,7 +426,7 @@ class DatabaseManager:
 
             order = result.data[0]
 
-            # Add order items & Sync Stock
+            # Populate order_items mapped against schema schema
             for item in items:
                 order_item = {
                     'order_id': order['id'],
@@ -438,14 +438,14 @@ class DatabaseManager:
                 }
                 self.client.table('order_items').insert(order_item).execute()
 
-                # FIXED: Automatically deduct stock from product_variants
+                # Automatically deduct stock from product_variants table
                 if 'variant_id' in item:
                     v_res = self.client.table('product_variants').select('stock').eq('id', item['variant_id']).execute()
                     if v_res.data:
                         current_stock = v_res.data[0]['stock']
                         self.update_variant_stock(item['variant_id'], current_stock - item['quantity'])
 
-            # If promo code used, increase usage counter
+            # Increment usage if promo code was successfully applied
             if promo_code_id:
                 self.apply_promo_code(promo_code_id)
 
@@ -456,7 +456,7 @@ class DatabaseManager:
             return None
 
     def get_orders(self, user_id: str = None, status: str = None) -> List[Dict[str, Any]]:
-        """Get orders with optional filters"""
+        """Get orders with relation joins"""
         try:
             query = self.client.table('orders').select('*, users(*), user_addresses(*)')
 
@@ -472,7 +472,7 @@ class DatabaseManager:
             return []
 
     def get_order(self, order_id: str) -> Optional[Dict[str, Any]]:
-        """Get order details with items"""
+        """Get order details along with individual order items"""
         try:
             order_result = self.client.table('orders').select(
                 '*, users(*), user_addresses(*)'
@@ -490,14 +490,14 @@ class DatabaseManager:
             return None
 
     def update_order_status(self, order_id: str, status: str) -> bool:
-        """Update order status"""
+        """Update order status keeping check constraint restrictions"""
         try:
             valid_statuses = ['pending', 'confirmed', 'shipped', 'delivered', 'cancelled']
             if status not in valid_statuses:
                 logger.error(f"Invalid status: {status}")
                 return False
 
-            result = self.client.table('orders').update(
+            self.client.table('orders').update(
                 {'order_status': status, 'updated_at': self._get_current_time()}
             ).eq('id', order_id).execute()
             logger.info(f"Updated order {order_id} status to {status}")
@@ -511,7 +511,7 @@ class DatabaseManager:
     # ============================================================
 
     def create_payment(self, order_id: str, payment_method: str, transaction_reference: str) -> Optional[Dict[str, Any]]:
-        """Create a payment record"""
+        """Create a payment record verified against schema checks"""
         try:
             # CHECK constraint: telebirr or cbe
             if payment_method not in ['telebirr', 'cbe']:
@@ -532,7 +532,7 @@ class DatabaseManager:
             return None
 
     def verify_payment(self, payment_id: str, admin_telegram_id: int) -> bool:
-        """Verify a payment and auto-confirm order status (admin only)"""
+        """Verify a payment and auto-confirm order status"""
         try:
             update_data = {
                 'is_verified': True,
@@ -574,8 +574,7 @@ class DatabaseManager:
     def update_payment_status(self, payment_id: str, status: str) -> bool:
         """Update payment status or verification state"""
         try:
-            # If rejected, we might log it or handle verification flags
-            result = self.client.table('payments').update({
+            self.client.table('payments').update({
                 'is_verified': False, 
                 'updated_at': self._get_current_time()
             }).eq('id', payment_id).execute()
@@ -583,12 +582,13 @@ class DatabaseManager:
         except Exception as e:
             logger.error(f"Error updating payment status: {e}")
             return False
+
     # ============================================================
     # REVIEW MANAGEMENT
     # ============================================================
 
     def add_review(self, user_id: str, product_id: str, rating: int, comment: str = None) -> Optional[Dict[str, Any]]:
-        """Add a product review"""
+        """Add a product review validating rating boundaries"""
         try:
             if rating < 1 or rating > 5:
                 logger.error(f"Rating {rating} must be between 1 and 5")
@@ -608,7 +608,7 @@ class DatabaseManager:
             return None
 
     def get_product_reviews(self, product_id: str) -> List[Dict[str, Any]]:
-        """Get all reviews for a product"""
+        """Get all reviews for a product with author metadata"""
         try:
             result = self.client.table('product_reviews').select(
                 '*, users(*)'
@@ -619,5 +619,5 @@ class DatabaseManager:
             return []
 
 
-# Initialize global database manager
+# Initialize global database manager instance
 db = DatabaseManager()

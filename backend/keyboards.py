@@ -40,6 +40,7 @@ def get_admin_panel_keyboard():
     return keyboard
 
 def get_category_menu():
+    """Get product categories menu."""
     markup = types.InlineKeyboardMarkup(row_width=2)
     markup.add(
         types.InlineKeyboardButton("👞 የወንዶች", callback_data="cat_የወንዶች"),
@@ -88,7 +89,7 @@ def get_cart_checkout_keyboard():
 
 def get_order_status_keyboard(order_id):
     """Get order status update inline keyboard for admins."""
-    keyboard = types.InlineKeyboardMarkup(row_width=3)
+    keyboard = types.InlineKeyboardMarkup(row_width=2)
     keyboard.add(
         types.InlineKeyboardButton("✅ ተረጋግጧል", callback_data=f"status_{order_id}_confirmed"),
         types.InlineKeyboardButton("🚚 ተልኳል", callback_data=f"status_{order_id}_shipped")
@@ -96,5 +97,30 @@ def get_order_status_keyboard(order_id):
     keyboard.add(
         types.InlineKeyboardButton("📦 ተጠናቋል", callback_data=f"status_{order_id}_delivered"),
         types.InlineKeyboardButton("❌ ተሰርዟል", callback_data=f"status_{order_id}_cancelled")
+    )
+    return keyboard
+
+# ============================================================
+# NEW KEYBOARDS FOR THE REWRITTEN CHECKOUT & PAYMENT FLOWS
+# ============================================================
+
+def get_allowed_cities_keyboard():
+    """Get checkout city selection reply keyboard matching backend validation rules."""
+    keyboard = types.ReplyKeyboardMarkup(resize_keyboard=True, one_time_keyboard=True, row_width=2)
+    # Allowed cities checklist in the database manager
+    cities = [
+        "Addis Ababa", "Adama", "Hawassa", "Bahir Dar", "Dire Dawa",
+        "Mekelle", "Gondar", "Jimma", "Dessie", "Shashamane"
+    ]
+    buttons = [types.KeyboardButton(city) for city in cities]
+    keyboard.add(*buttons)
+    return keyboard
+
+def get_payment_methods_keyboard():
+    """Get system payment provider selection reply keyboard."""
+    keyboard = types.ReplyKeyboardMarkup(resize_keyboard=True, one_time_keyboard=True, row_width=2)
+    keyboard.add(
+        types.KeyboardButton("telebirr"),
+        types.KeyboardButton("cbe")
     )
     return keyboard
