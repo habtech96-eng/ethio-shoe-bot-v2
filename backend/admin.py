@@ -2,6 +2,7 @@
 """
 Admin handlers for Ethio Shoe Store
 Full operations for managing footwear products and variants with strict state navigation validation.
+Fully integrated with DatabaseManager abstractions.
 """
 import sys
 import os
@@ -65,7 +66,7 @@ def register_admin_handlers(bot):
         bot.send_message(chat_id, "👟 እባክዎ የጫማውን ሙሉ ስም (Model Name) ያስገቡ፦\n(ምሳሌ፦ Nike Air Jordan 4)")
         bot.set_state(chat_id, AddProductStates.waiting_for_name)
 
-    # 🗂️ 2. የጫማ ስም መቀбеያ እና የክፍል (Category) ምርጫ
+    # 🗂️ 2. የጫማ ስም መቀበያ እና የክፍል (Category) ምርጫ
     @bot.message_handler(state=AddProductStates.waiting_for_name)
     def process_name(message):
         chat_id = message.chat.id
@@ -83,7 +84,7 @@ def register_admin_handlers(bot):
             InlineKeyboardButton("👞 የወንዶች", callback_data="cat_የወንዶች"),
             InlineKeyboardButton("👠 የሴቶች", callback_data="cat_የሴቶች"),
             InlineKeyboardButton("👶 የህፃናት", callback_data="cat_የህፃናት"),
-            InlineKeyboardButton("👥 የሁለቱም", callback_data="cat_የሁለቱም")
+            InlineKeyboardButton("👥 የሁለቱም", callback_data="cat_የሁለቱም/Unisex")  # 👈 ከ database constraints ጋር ተስተካክሏል
         )
         bot.send_message(chat_id, "🗂️ እባክዎ ከታች ካሉት አዝራሮች የጫማውን የክፍል (Category) አይነት ይምረጡ፦", reply_markup=markup)
         bot.set_state(chat_id, AddProductStates.waiting_for_category)
@@ -94,7 +95,7 @@ def register_admin_handlers(bot):
         chat_id = message.chat.id
         bot.send_message(chat_id, "⚠️ እባክዎ ዝም ብለው ከመጻፍ ይልቅ ከላይ ካሉት የካቴጎሪ አዝራሮች አንዱን ይጫኑ!")
 
-    # 🏷️ 3. የጫማ ክፍል መቀበያ እና የብራንድ ምርጫ (ከዳታቤዝ UUID ጋር ለማገናኘት)
+    # 🏷️ 3. የጫማ ክፍል መቀበያ እና የብራንድ ምርጫ
     @bot.callback_query_handler(func=lambda call: call.data.startswith("cat_"), state=AddProductStates.waiting_for_category)
     def process_category(call):
         chat_id = call.message.chat.id
@@ -104,7 +105,6 @@ def register_admin_handlers(bot):
         with bot.retrieve_data(chat_id) as data:
             data['category'] = category
         
-        # በዳታቤዝህ ውስጥ ያሉትን ብራንዶች ስም ወይም UUID ለማውጣት (ከሌለ በ text ፍለጋ ይሰራል)
         markup = InlineKeyboardMarkup(row_width=2)
         markup.add(
             InlineKeyboardButton("Nike", callback_data="brand_Nike"),
@@ -112,7 +112,8 @@ def register_admin_handlers(bot):
             InlineKeyboardButton("Puma", callback_data="brand_Puma"),
             InlineKeyboardButton("Reebok", callback_data="brand_Reebok"),
             InlineKeyboardButton("Jordan", callback_data="brand_Jordan"),
-            InlineKeyboardButton("ሀገር በቀል (Local)", callback_data="brand_Local")
+            InlineKeyboardButton("ሀገር በቀል (Local)", callback_data="brand_Local"),
+            InlineKeyboardButton("ሌላ (Other)", callback_data="brand_Other")
         )
         bot.edit_message_text(f"🗂️ የተመረጠው ክፍል፦ {category}\n\n🏷️ በመቀጠል እባክዎ የጫማውን ብራንድ (Brand) ይምረጡ፦", chat_id, call.message.message_id, reply_markup=markup)
         bot.set_state(chat_id, AddProductStates.waiting_for_brand)
@@ -196,55 +197,36 @@ def register_admin_handlers(bot):
         try:
             with bot.retrieve_data(chat_id) as data:
                 if not data.get('name') or not data.get('category') or not data.get('base_price'):
-                    raise ValueError("Core fields missing.")
+                    raise ValueError("Core fields missing in FSM state.")
                 
-                # 🔄 ለሰንጠረዡ የ brand_id ለማግኘት መጀመሪያ የብራንድ UUID እንፈልጋለን
-                # በ Supabase ላይ የ 'brands' ሰንጠረዥ ካለህ በስሙ እንፈልጋለን፣ ከሌለ ቀጥታ ስሙን ይልካል
-                brand_id = None
-                try:
-                    brand_res = db.supabase.table('brands').select('id').eq('name', data['brand']).execute()
-                    if brand_res.data:
-                        brand_id = brand_res.data[0]['id']
-                except Exception:
-                    # የብራንድ ሰንጠረዥ ከሌለ ወይም ስህተት ካጋጠመ የቆየውን ፍሰት እንዳይሰብር ማድረግ
-                    pass
-
-                # 📝 ወደ 'products' ሰንጠረዥ ውሂቡን ማስገባት
-                product_payload = {
-                    "name": data['name'],
-                    "category": data['category'],
-                    "base_price": data['base_price'],
-                    "original_price": data.get('original_price'),
-                    "description": description,
-                    "is_active": True
-                }
-                
-                # brand_id ካገኘን እንጨምራለን፣ ካልሆነ የነበረውን የ text ሜዳ ካለ እንጠቀማለን
-                if brand_id:
-                    product_payload["brand_id"] = brand_id
-                else:
-                    product_payload["brand"] = data['brand']
-
-                # በቀጥታ በሰንጠረዥ ማስገባት (ከ database.py ጋር በተስማማ መልኩ)
-                res = db.supabase.table('products').insert(product_payload).execute()
+                # 🔄 በ database.py ላይ ያለውን የ DatabaseManager ዝግጁ ፈንክሽን መጠቀም
+                product = db.db.add_product(
+                    name=data['name'],
+                    category=data['category'],
+                    base_price=data['base_price'],
+                    description=description,
+                    brand=data['brand'],
+                    original_price=data.get('original_price')
+                )
                 
                 bot.delete_message(chat_id, load_msg.message_id)
                 
-                if not res.data:
-                    bot.send_message(chat_id, "❌ ስህተት፦ የጫማውን መረጃ ዳታቤዝ ላይ መጫን አልተሳካም። እባክዎ ከመጀመሪያው ይጀምሩ።")
+                if not product:
+                    bot.send_message(chat_id, "❌ ስህተት፦ የጫማውን መረጃ ዳታቤዝ ላይ መጫን አልተሳካም። እባክዎ ካቴጎሪ ወይም ብራንድ ትክክል መሆኑን አረጋግጠው ከአዲስ ይጀምሩ።")
                     bot.delete_state(chat_id)
                     return
                 
-                product = res.data[0]
-                data['product_id'] = product['id'] # አዲሱን UUID ማስቀመጥ
+                data['product_id'] = product['id'] # የተመለሰውን UUID ማስቀመጥ
             
             bot.send_message(chat_id, "📐 አሁን ለጫማው ዝርዝር መረጃዎችን እናስገባ።\nየመጀመሪያውን የጫማ መጠን ቁጥር (Size) ያስገቡ (ከ 30 እስከ 50 መካከል)፦")
             bot.set_state(chat_id, AddProductStates.waiting_for_variant_size)
             
         except Exception as e:
             logger.error(f"Error in creating base product: {e}")
-            if chat_id in load_msg.chat:
+            try:
                 bot.delete_message(chat_id, load_msg.message_id)
+            except Exception:
+                pass
             bot.send_message(chat_id, "❌ የዳታቤዝ ስህተት አጋጥሟል። እባክዎ የሜዳዎች አወቃቀር (Schema) በትክክል መሆኑን ያረጋግጡ።")
             bot.delete_state(chat_id)
         finally:
@@ -264,7 +246,7 @@ def register_admin_handlers(bot):
         with bot.retrieve_data(chat_id) as data:
             data['variant_size'] = int(size_text)
         
-        bot.send_message(chat_id, "🎨 የዚህን መጠን ጫማ ቀለም ያስገቡ (ምчнее፦ ጥቁር፣ ነጭ)፦")
+        bot.send_message(chat_id, "🎨 የዚህን መጠን ጫማ ቀለም ያስገቡ (ምሳሌ፦ ጥቁር፣ ነጭ)፦")
         bot.set_state(chat_id, AddProductStates.waiting_for_variant_color)
 
     # 📦 9. የጫማ ቀለም መቀበያ እና የክምችት (Stock) ብዛት ጥያቄ
@@ -312,21 +294,19 @@ def register_admin_handlers(bot):
 
         try:
             with bot.retrieve_data(chat_id) as data:
-                # 'product_variants' ሰንጠረዥ ላይ ማስገባት
-                variant_payload = {
-                    "product_id": data['product_id'],
-                    "size": data['variant_size'],
-                    "color": data['variant_color'],
-                    "stock": data['variant_stock'],
-                    "image_url": image_url
-                }
+                # 🔄 በ database.py ላይ ያለውን የ DatabaseManager ዝግጁ ፈንክሽን መጠቀም
+                variant = db.db.add_product_variant(
+                    product_id=data['product_id'],
+                    size=data['variant_size'],
+                    color=data['variant_color'],
+                    stock=data['variant_stock'],
+                    image_url=image_url
+                )
                 
-                res = db.supabase.table('product_variants').insert(variant_payload).execute()
-                
-                if res.data:
+                if variant:
                     price_display = f"{data['base_price']} ETB"
                     if data.get('original_price'):
-                        price_display = f"~~{data['original_price']}~~ {data['base_price']} ETB"
+                        price_display = f"<s>{data['original_price']}</s> {data['base_price']} ETB"
                     
                     success_text = (
                         f"✅ <b>አዲስ ጫማ በተሳካ ሁኔታ ተመዝግቧል!</b>\n\n"
@@ -434,17 +414,16 @@ def register_admin_handlers(bot):
 
         try:
             with bot.retrieve_data(chat_id) as data:
-                variant_payload = {
-                    "product_id": data['product_id'],
-                    "size": data['variant_size'],
-                    "color": data['variant_color'],
-                    "stock": data['variant_stock'],
-                    "image_url": image_url
-                }
+                # 🔄 በ database.py ላይ ያለውን የ DatabaseManager ዝግጁ ፈንክሽን መጠቀም
+                variant = db.db.add_product_variant(
+                    product_id=data['product_id'],
+                    size=data['variant_size'],
+                    color=data['variant_color'],
+                    stock=data['variant_stock'],
+                    image_url=image_url
+                )
                 
-                res = db.supabase.table('product_variants').insert(variant_payload).execute()
-                
-                if res.data:
+                if variant:
                     success_text = (
                         f"✅ <b>ተጨማሪ የጫማ ዝርዝር በተሳካ ሁኔታ ተቀምጧል!</b>\n\n"
                         f"📐 <b>መጠን (Size):</b> {data['variant_size']}\n"

@@ -149,7 +149,7 @@ def register_handlers(bot):
         elif text == "📞 እኛን ለማግኘት":
             bot.send_message(
                 chat_id,
-                "📞 እኛን ለማግኘት በስልክ ቁጥር +2519XXXXXXXX መደወል ይችላሉ።"
+                "📞 እኛን ለማግኘት በስልክ ቁጥር +251938649925 መደወል ይችላሉ።"
             )
 
         elif text == "🛍️ የእኔ ትዕዛዞች":
@@ -542,8 +542,8 @@ def register_handlers(bot):
         bot.send_message(
             chat_id, 
             "💳 እባክዎ የክፍያ ዘዴ ይምረጡ (የመረጡትን ይጫኑ)፦\n\n"
-            "🔸 **telebirr**: ቁጥር `+2519XXXXXXXX`\n"
-            "🔸 **CBE**: የሂሳብ ቁጥር `1000XXXXXXXXX`",
+            "🔸 **telebirr**: ቁጥር `+25193849925`\n"
+            "🔸 **CBE**: የሂሳብ ቁጥር `1000274286637`",
             reply_markup=markup,
             parse_mode="Markdown"
         )
