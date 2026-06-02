@@ -2,7 +2,6 @@
 Database connection and models for Ethiopian Shoe Store
 PostgreSQL backend using Supabase
 """
-import sys
 import os
 from typing import Optional, List, Dict, Any
 from datetime import datetime, timezone
@@ -10,7 +9,7 @@ from supabase import create_client, Client
 from dotenv import load_dotenv
 import logging
 
-# CRITICAL: Load environment variables properly
+# Load environment variables properly
 load_dotenv()
 
 # Initialize logging
@@ -98,17 +97,24 @@ class DatabaseManager:
 
     def add_address(self, user_id: str, city: str, subcity_or_zone: str = None,
                     specific_location: str = None, is_default: bool = False) -> Optional[Dict[str, Any]]:
-        """Add a new address for user"""
+        """Add a new address for user (With City Validation)"""
         try:
+            # CHECK Constraint Validation
+            allowed_cities = ['Addis Ababa', 'Adama', 'Hawassa', 'Bahir Dar', 'Dire Dawa', 'Mekelle', 'Gondar', 'Jimma', 'Dessie', 'Shashamane']
+            if city not in allowed_cities:
+                logger.error(f"Invalid city provided: {city}. Must be one of {allowed_cities}")
+                return None
+
             # If setting as default, unset other defaults
             if is_default:
                 self.client.table('user_addresses').update({'is_default': False}).eq('user_id', user_id).execute()
 
+            # FIXED: column name changed from specific_location to specific_location_or_woreda to match schema
             address_data = {
                 'user_id': user_id,
                 'city': city,
                 'subcity_or_zone': subcity_or_zone,
-                'specific_location_or_woreda': specific_location,
+                'specific_location_or_woreda': specific_location, 
                 'is_default': is_default
             }
             result = self.client.table('user_addresses').insert(address_data).execute()
@@ -133,8 +139,19 @@ class DatabaseManager:
 
     def add_product(self, name: str, category: str, base_price: int, description: str = None,
                     brand: str = None, original_price: int = None) -> Optional[Dict[str, Any]]:
-        """Add a new product"""
+        """Add a new product (With Category & Brand Validation)"""
         try:
+            # Category Check
+            allowed_categories = ['የወንዶች', 'የሴቶች', 'የህፃናት', 'የሁለቱም/Unisex']
+            if category not in allowed_categories:
+                logger.error(f"Invalid category: {category}")
+                return None
+
+            # Brand Check
+            if brand and brand not in ['Nike', 'Adidas', 'Puma', 'Reebok', 'Jordan', 'Local', 'Other']:
+                logger.error(f"Invalid brand: {brand}")
+                return None
+
             product_data = {
                 'name': name,
                 'category': category,
@@ -198,7 +215,7 @@ class DatabaseManager:
     def delete_product(self, product_id: str) -> bool:
         """Delete a product (soft delete)"""
         try:
-            result = self.client.table('products').update({'is_active': False, 'updated_at': self._get_current_time()}).eq('id', product_id).execute()
+            self.client.table('products').update({'is_active': False, 'updated_at': self._get_current_time()}).eq('id', product_id).execute()
             logger.info(f"Deleted product: {product_id}")
             return True
         except Exception as e:
@@ -213,6 +230,11 @@ class DatabaseManager:
                             stock: int = 0, image_url: str = None) -> Optional[Dict[str, Any]]:
         """Add a product variant (size/color combination)"""
         try:
+            # Size Check Constraint
+            if size < 30 or size > 50:
+                logger.error(f"Size {size} out of boundary (30-50)")
+                return None
+
             variant_data = {
                 'product_id': product_id,
                 'size': size,
@@ -251,7 +273,7 @@ class DatabaseManager:
         """Update stock for a variant"""
         try:
             result = self.client.table('product_variants').update(
-                {'stock': stock, 'updated_at': self._get_current_time()}
+                {'stock': max(0, stock), 'updated_at': self._get_current_time()}
             ).eq('id', variant_id).execute()
             logger.info(f"Updated stock for variant: {variant_id}")
             return True
@@ -336,7 +358,7 @@ class DatabaseManager:
     # ============================================================
 
     def validate_promo_code(self, code: str, order_amount: int) -> Optional[Dict[str, Any]]:
-        """Validate and get promo code details"""
+        """Validate and get promo code details (FIXED Timezone Check)"""
         try:
             result = self.client.table('promo_codes').select('*').eq('code', code).eq('is_active', True).execute()
 
@@ -345,10 +367,10 @@ class DatabaseManager:
 
             promo = result.data[0]
 
-            # Check expiration
+            # FIXED: Handled ISO Expiration string parsing safely with UTC
             if promo.get('expires_at'):
                 expires = datetime.fromisoformat(promo['expires_at'].replace('Z', '+00:00'))
-                if datetime.now(expires.tzinfo) > expires:
+                if datetime.now(timezone.utc) > expires:
                     return None
 
             # Check usage limit
@@ -384,7 +406,7 @@ class DatabaseManager:
     def create_order(self, user_id: str, items: List[Dict[str, Any]], subtotal: int,
                      delivery_fee: int, discount_amount: int, total_amount: int,
                      shipping_address_id: str, contact_phone: str, promo_code_id: str = None) -> Optional[Dict[str, Any]]:
-        """Create a new order"""
+        """Create a new order and reduce variants stock automatically"""
         try:
             order_data = {
                 'user_id': user_id,
@@ -404,7 +426,7 @@ class DatabaseManager:
 
             order = result.data[0]
 
-            # Add order items
+            # Add order items & Sync Stock
             for item in items:
                 order_item = {
                     'order_id': order['id'],
@@ -415,6 +437,17 @@ class DatabaseManager:
                     'price_per_unit': item['price_per_unit']
                 }
                 self.client.table('order_items').insert(order_item).execute()
+
+                # FIXED: Automatically deduct stock from product_variants
+                if 'variant_id' in item:
+                    v_res = self.client.table('product_variants').select('stock').eq('id', item['variant_id']).execute()
+                    if v_res.data:
+                        current_stock = v_res.data[0]['stock']
+                        self.update_variant_stock(item['variant_id'], current_stock - item['quantity'])
+
+            # If promo code used, increase usage counter
+            if promo_code_id:
+                self.apply_promo_code(promo_code_id)
 
             logger.info(f"Created order: {order['id']}")
             return order
@@ -480,6 +513,11 @@ class DatabaseManager:
     def create_payment(self, order_id: str, payment_method: str, transaction_reference: str) -> Optional[Dict[str, Any]]:
         """Create a payment record"""
         try:
+            # CHECK constraint: telebirr or cbe
+            if payment_method not in ['telebirr', 'cbe']:
+                logger.error(f"Invalid payment method: {payment_method}")
+                return None
+
             payment_data = {
                 'order_id': order_id,
                 'payment_method': payment_method,
@@ -494,7 +532,7 @@ class DatabaseManager:
             return None
 
     def verify_payment(self, payment_id: str, admin_telegram_id: int) -> bool:
-        """Verify a payment (admin only)"""
+        """Verify a payment and auto-confirm order status (admin only)"""
         try:
             update_data = {
                 'is_verified': True,
@@ -503,6 +541,12 @@ class DatabaseManager:
                 'updated_at': self._get_current_time()
             }
             result = self.client.table('payments').update(update_data).eq('id', payment_id).execute()
+            
+            # Auto-confirm the order status once payment is verified
+            if result.data:
+                order_id = result.data[0]['order_id']
+                self.update_order_status(order_id, 'confirmed')
+
             logger.info(f"Payment {payment_id} verified by admin {admin_telegram_id}")
             return True
         except Exception as e:
@@ -525,6 +569,10 @@ class DatabaseManager:
     def add_review(self, user_id: str, product_id: str, rating: int, comment: str = None) -> Optional[Dict[str, Any]]:
         """Add a product review"""
         try:
+            if rating < 1 or rating > 5:
+                logger.error(f"Rating {rating} must be between 1 and 5")
+                return None
+
             review_data = {
                 'user_id': user_id,
                 'product_id': product_id,
