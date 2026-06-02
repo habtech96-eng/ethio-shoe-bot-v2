@@ -66,7 +66,7 @@ def register_admin_handlers(bot):
         bot.send_message(chat_id, "👟 እባክዎ የጫማውን ሙሉ ስም (Model Name) ያስገቡ፦\n(ምሳሌ፦ Nike Air Jordan 4)")
         bot.set_state(chat_id, AddProductStates.waiting_for_name)
 
-    # 🗂️ 2. የጫማ ስም መቀበያ እና የክፍል (Category) ምርጫ
+   # 🗂️ 2. የጫማ ስም መቀበያ እና የክፍል (Category) ምርጫ ማሳያ
     @bot.message_handler(state=AddProductStates.waiting_for_name)
     def process_name(message):
         chat_id = message.chat.id
@@ -84,18 +84,26 @@ def register_admin_handlers(bot):
             InlineKeyboardButton("👞 የወንዶች", callback_data="cat_የወንዶች"),
             InlineKeyboardButton("👠 የሴቶች", callback_data="cat_የሴቶች"),
             InlineKeyboardButton("👶 የህፃናት", callback_data="cat_የህፃናት"),
-            InlineKeyboardButton("👥 የሁለቱም", callback_data="cat_የሁለቱም/Unisex")  # 👈 ከ database constraints ጋር ተስተካክሏል
+            InlineKeyboardButton("👥 የሁለቱም", callback_data="cat_የሁለቱም/Unisex")
         )
-        bot.send_message(chat_id, "🗂️ እባክዎ ከታች ካሉት አዝራሮች የጫማውን የክፍል (Category) አይነት ይምረጡ፦", reply_markup=markup)
+        # እዚህ ጋር ስቴቱን ወደ waiting_for_category እንቀይራለን
         bot.set_state(chat_id, AddProductStates.waiting_for_category)
+        bot.send_message(chat_id, "🗂️ እባክዎ ከታች ካሉት አዝራሮች የጫማውን የክፍል (Category) አይነት ይምረጡ፦", reply_markup=markup)
 
-    # 🛡️ STERN NAVIGATION GUARD ለ Category
+    # 🛡️ STERN NAVIGATION GUARD ለ Category (ጽሑፍ እንዳይቀበል መከላከያ)
     @bot.message_handler(state=AddProductStates.waiting_for_category)
     def guard_category(message):
         chat_id = message.chat.id
-        bot.send_message(chat_id, "⚠️ እባክዎ ዝም ብለው ከመጻፍ ይልቅ ከላይ ካሉት የካቴጎሪ አዝራሮች አንዱን ይጫኑ!")
+        markup = InlineKeyboardMarkup(row_width=2)
+        markup.add(
+            InlineKeyboardButton("👞 የወንዶች", callback_data="cat_የወንዶች"),
+            InlineKeyboardButton("👠 የሴቶች", callback_data="cat_የሴቶች"),
+            InlineKeyboardButton("👶 የህፃናት", callback_data="cat_የህፃናት"),
+            InlineKeyboardButton("👥 የሁለቱም", callback_data="cat_የሁለቱም/Unisex")
+        )
+        bot.send_message(chat_id, "⚠️ ስህተት፦ እባክዎ በጽሑፍ አይጻፉ! ከላይ ካሉት አዝራሮች አንዱን መምረጥ አለብዎት፦", reply_markup=markup)
 
-    # 🏷️ 3. የጫማ ክፍል መቀበያ እና የብራንድ ምርጫ
+    # 🏷️ 3. የጫማ ክፍል መቀበያ እና የብራንድ ምርጫ ማሳያ
     @bot.callback_query_handler(func=lambda call: call.data.startswith("cat_"), state=AddProductStates.waiting_for_category)
     def process_category(call):
         chat_id = call.message.chat.id
@@ -115,15 +123,23 @@ def register_admin_handlers(bot):
             InlineKeyboardButton("ሀገር በቀል (Local)", callback_data="brand_Local"),
             InlineKeyboardButton("ሌላ (Other)", callback_data="brand_Other")
         )
-        bot.edit_message_text(f"🗂️ የተመረጠው ክፍል፦ {category}\n\n🏷️ በመቀጠል እባክዎ የጫማውን ብራንድ (Brand) ይምረጡ፦", chat_id, call.message.message_id, reply_markup=markup)
+        # እዚህ ጋር ስቴቱን ወደ waiting_for_brand እንቀይራለን
         bot.set_state(chat_id, AddProductStates.waiting_for_brand)
+        bot.edit_message_text(f"🗂️ የተመረጠው ክፍል፦ {category}\n\n🏷️ በመቀጠል እባክዎ የጫማውን ብራንድ (Brand) ይምረጡ፦", chat_id, call.message.message_id, reply_markup=markup)
 
-    # 🛡️ STERN NAVIGATION GUARD ለ Brand
+    # 🛡️ STERN NAVIGATION GUARD ለ Brand (ጽሑፍ እንዳይቀበል መከላከያ)
     @bot.message_handler(state=AddProductStates.waiting_for_brand)
     def guard_brand(message):
         chat_id = message.chat.id
-        bot.send_message(chat_id, "⚠️ እባክዎ ዝም ብለው ከመጻፍ ይልቅ ከላይ ካሉት የብራንድ አዝራሮች አንዱን ይጫኑ!")
-
+        markup = InlineKeyboardMarkup(row_width=2)
+        markup.add(
+            InlineKeyboardButton("Nike", callback_data="brand_Nike"),
+            InlineKeyboardButton("Adidas", callback_data="brand_Adidas"),
+            InlineKeyboardButton("Puma", callback_data="brand_Puma"),
+            InlineKeyboardButton("Reebok", callback_data="brand_Reebok"),
+            InlineKeyboardButton("Jordan", callback_data="brand_Jordan")
+        )
+        bot.send_message(chat_id, "⚠️ ስህተት፦ እባክዎ በጽሑፍ አይጻፉ! ከላይ ካሉት የብራንድ አዝራሮች አንዱን ይጫኑ፦", reply_markup=markup)
     # 💵 4. የብራንድ መቀበያ እና የመሸጫ ዋጋ ጥያቄ
     @bot.callback_query_handler(func=lambda call: call.data.startswith("brand_"), state=AddProductStates.waiting_for_brand)
     def process_brand(call):
