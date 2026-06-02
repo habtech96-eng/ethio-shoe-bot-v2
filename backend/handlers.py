@@ -51,7 +51,6 @@ def register_handlers(bot):
                 reply_markup=keyboards.get_main_menu()
             )
 
-    # 🛠️ ማስተካከያ፡ የ /cart መቆጣጠሪያውን ሁሉንም የጽሑፍ መልዕክት ከሚይዘው handler በላይ አምጥተነዋል
     @bot.message_handler(commands=['cart'])
     def show_cart(message):
         chat_id = message.chat.id
@@ -101,7 +100,6 @@ def register_handlers(bot):
             reply_markup=keyboards.get_cart_checkout_keyboard()
         )
 
-    # ⚠️ ሁሉንም የጽሑፍ መልዕክት የሚይዘው (Catch-all text handler) አሁን ከታች ሆኗል
     @bot.message_handler(func=lambda message: True)
     def handle_messages(message):
         chat_id = message.chat.id
@@ -109,7 +107,7 @@ def register_handlers(bot):
         telegram_id = message.from_user.id
 
         if text == "🔐 Admin Panel":
-            if telegram_id in ADMIN_IDS:  # Patched secure check
+            if telegram_id in ADMIN_IDS:
                 bot.send_message(
                     chat_id,
                     "🛠️ የአድሚን ማዘዣ ሰሌዳ፦",
@@ -149,10 +147,8 @@ def register_handlers(bot):
                 bot.send_message(chat_id, f"⚠️ በአሁኑ ሰዓት በ '{category}' ምድብ ስር ምንም ምርት የለም።")
                 return
 
-            # Safety Guard: Clamped loop to prevent triggering HTTP 429 Rate Limiting issues
             for product in products[:10]:
                 variants = product.get('product_variants', [])
-
                 base_price = product.get('base_price', 0)
                 original_price = product.get('original_price')
 
@@ -232,7 +228,7 @@ def register_handlers(bot):
                     'cancelled': '❌ ተሰርዟል'
                 }
                 status_display = status_map.get(order.get('order_status'), "ያልታወቀ ሁኔታ")
-                order_id_short = str(order.get('id', ''))[:8]  # Explicit string conversion safeguards tracking arrays
+                order_id_short = str(order.get('id', ''))[:8]
 
                 order_text = (
                     f"🆔 **የትዕዛዝ ቁጥር:** #{order_id_short}\n"
@@ -241,7 +237,6 @@ def register_handlers(bot):
                 )
                 bot.send_message(chat_id, order_text, parse_mode="Markdown")
 
-    # 🛍️ Inline button handlers
     @bot.callback_query_handler(func=lambda call: call.data.startswith("product_"))
     def handle_product_detail(call):
         chat_id = call.message.chat.id
@@ -323,7 +318,7 @@ def register_handlers(bot):
             bot.answer_callback_query(call.id, "⚠️ ስህተት ተከስቷል።")
             return
 
-        color = "_".join(parts[3:])  # Safely handle compound naming structures
+        color = "_".join(parts[3:])
         bot.answer_callback_query(call.id)
 
         user = db.get_user(call.from_user.id)
@@ -359,7 +354,7 @@ def register_handlers(bot):
             logger.error(f"Failed handling cart transaction sequence: {e}")
             bot.send_message(chat_id, "❌ ምርቱን ወደ ጋሪ መጫን አልተሳካም።")
 
-@bot.callback_query_handler(func=lambda call: call.data == "clear_cart_action")
+    @bot.callback_query_handler(func=lambda call: call.data == "clear_cart_action")
     def handle_clear_cart(call):
         chat_id = call.message.chat.id
         user = db.get_user(call.from_user.id)
@@ -376,7 +371,7 @@ def register_handlers(bot):
         telegram_id = call.from_user.id
         chat_id = call.message.chat.id
 
-        if telegram_id not in ADMIN_IDS:  # Patched secure authorization barrier
+        if telegram_id not in ADMIN_IDS:
             bot.answer_callback_query(call.id, text="እርምጃው አልተፈቀደም!", show_alert=True)
             return
 
