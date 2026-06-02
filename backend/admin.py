@@ -2,7 +2,7 @@
 """
 Admin handlers for Ethio Shoe Store
 Full operations for managing footwear products and variants with strict state navigation validation.
-Fully integrated with DatabaseManager abstractions.
+Fully synchronized with the public Postgres SQL schema constraint rules.
 """
 import sys
 import os
@@ -22,10 +22,10 @@ except ImportError:
 
 logger = logging.getLogger(__name__)
 
-# አድሚኖች በተከታታይ መልዕክት ሲልኩ መደራረብን መከላከያ (Race Condition Lock)
+# አድሚኖች በተከታታይ ፈጣን መልዕክት ሲልኩ መረጃ እንዳይደባለቅ መከላከያ (Race Condition Lock)
 processing_admins = set()
 
-# ምርት እና የጫማ መጠን/ቀለም ለመጨመር የሚያገለግሉ የስቴት ደረጃዎች
+# ምርት እና የጫማ መጠን/ቀለም ለመጨመር የሚያገለግሉ ጥብቅ የስቴት ደረጃዎች
 class AddProductStates(StatesGroup):
     waiting_for_name = State()
     waiting_for_category = State()
@@ -46,15 +46,15 @@ class AddVariantStates(StatesGroup):
 
 def register_admin_handlers(bot):
     
-    # 👟 1. አዲስ ጫማ መመዝገቢያ መጀመሪያ (ከአዝራር ሲነካ)
+    # 👟 1. አዲስ ጫማ መመዝገቢያ መጀመሪያ (ከአድሚን ፓነል አዝራር ሲነካ)
     @bot.callback_query_handler(func=lambda call: call.data == "admin_add_product")
     def start_add_product(call):
         chat_id = call.message.chat.id
         telegram_id = call.from_user.id
         
-        # ደህንነት ማረጋገጫ - በቴሌግራም መታወቂያ
+        # ደህንነት ማረጋገጫ - በአድሚን መታወቂያ
         if telegram_id not in ADMIN_IDS:
-            bot.answer_callback_query(call.id, "❌ ይህ የአድሚን ተግባር ለእርስዎ አልተፈቀደም!", show_alert=True)
+            bot.answer_callback_query(call.id, "❌ ይህ ተግባር ለእርስዎ አልተፈቀደም!", show_alert=True)
             return
         
         bot.answer_callback_query(call.id)
@@ -66,13 +66,13 @@ def register_admin_handlers(bot):
         bot.set_state(chat_id, AddProductStates.waiting_for_name)
         bot.send_message(chat_id, "👟 እባክዎ የጫማውን ሙሉ ስም (Model Name) ያስገቡ፦\n(ምሳሌ፦ Nike Air Jordan 4)")
 
-    # 🗂️ 2. የጫማ ስም መቀበያ እና የክፍል (Category) ምርጫ
+    # 🗂️ 2. የጫማ ስም መቀበያ እና የክፍል (Category) ምርጫ ማሳያ
     @bot.message_handler(state=AddProductStates.waiting_for_name)
     def process_name(message):
         chat_id = message.chat.id
         product_name = message.text.strip()
         
-        # የትዕዛዝ ማዘዣ ጽሑፎችን (Commands/Panels) ለመከላከል
+        # የፓነል ማዘዣ ጽሑፎች ከመጡ ፍሰቱን ላለማበላሸት መግታት
         if product_name.startswith('/') or "Admin Panel" in product_name:
             return
 
@@ -80,12 +80,13 @@ def register_admin_handlers(bot):
             bot.send_message(chat_id, "⚠️ እባክዎ ትክክለኛ የጫማ ስም ያስገቡ፦")
             return
 
-        # ስቴቱን ወዲያውኑ ወደ ካቴጎሪ መቀየር (ሌላ ፍሰት እንዳይረብሸው)
+        # ስቴቱን ወዲያውኑ ወደ ቀጣዩ ደረጃ መቀየር
         bot.set_state(chat_id, AddProductStates.waiting_for_category)
 
         with bot.retrieve_data(chat_id) as data:
             data['name'] = product_name
         
+        # በ SQL Schema CHECK (category = ANY (...)) ላይ ያሉትን ቃላት በትክክል መጠቀም
         markup = InlineKeyboardMarkup(row_width=2)
         markup.add(
             InlineKeyboardButton("👞 የወንዶች", callback_data="cat_የወንዶች"),
@@ -93,9 +94,15 @@ def register_admin_handlers(bot):
             InlineKeyboardButton("👶 የህፃናት", callback_data="cat_የህፃናት"),
             InlineKeyboardButton("👥 የሁለቱም", callback_data="cat_የሁለቱም/Unisex")
         )
-        bot.send_message(chat_id, f"✅ የጫማ ስም: <b>{product_name}</b> ተይዟል።\n\n🗂️ እባክዎ ከታች ካሉት አዝራሮች የጫማውን የክፍል (Category) አይነት ይምረጡ፦", parse_mode="HTML", reply_markup=markup)
+        bot.send_message(
+            chat_id, 
+            f"✅ የጫማ ስም: <b>{product_name}</b> ተይዟል።\n\n🗂 "
+            f"እባክዎ ከታች ካሉት አዝራሮች የጫማውን የክፍል (Category) አይነት ይምረጡ፦", 
+            parse_mode="HTML", 
+            reply_markup=markup
+        )
 
-    # 🛡️ STERN NAVIGATION GUARD ለ Category (ጽሑፍ መፃፍ ክልክል ነው)
+    # 🛡️ STERN NAVIGATION GUARD ለ Category (ጽሑፍ እንዳይቀበል መከላከያ)
     @bot.message_handler(state=AddProductStates.waiting_for_category)
     def guard_category(message):
         chat_id = message.chat.id
@@ -111,19 +118,19 @@ def register_admin_handlers(bot):
         )
         bot.send_message(chat_id, "⚠️ ስህተት፦ እባክዎ በጽሑፍ አይጻፉ! ከላይ ካሉት የካቴጎሪ አዝራሮች አንዱን መምረጥ አለብዎት፦", reply_markup=markup)
 
-    # 🏷️ 3. የጫማ ክፍል መቀበያ እና የብራንድ ምርጫ
+    # 🏷️ 3. የጫማ ክፍል መቀበያ እና የብራንድ ምርጫ ማሳያ
     @bot.callback_query_handler(func=lambda call: call.data.startswith("cat_"), state=AddProductStates.waiting_for_category)
     def process_category(call):
         chat_id = call.message.chat.id
         category = call.data.replace("cat_", "")
         bot.answer_callback_query(call.id)
         
-        # ስቴቱን ወደ ብራንድ መቀየር
         bot.set_state(chat_id, AddProductStates.waiting_for_brand)
 
         with bot.retrieve_data(chat_id) as data:
             data['category'] = category
         
+        # በ SQL Schema CHECK (brand = ANY (...)) ላይ ያሉትን ብራንዶች በትክክል ማስተካከል
         markup = InlineKeyboardMarkup(row_width=2)
         markup.add(
             InlineKeyboardButton("Nike", callback_data="brand_Nike"),
@@ -134,9 +141,15 @@ def register_admin_handlers(bot):
             InlineKeyboardButton("ሀገር በቀል (Local)", callback_data="brand_Local"),
             InlineKeyboardButton("ሌላ (Other)", callback_data="brand_Other")
         )
-        bot.edit_message_text(f"🗂️ የተመረጠው ክፍል፦ <b>{category}</b>\n\n🏷️ በመቀጠል እባክዎ የጫማውን ብራንድ (Brand) ይምረጡ፦", chat_id, call.message.message_id, parse_mode="HTML", reply_markup=markup)
+        bot.edit_message_text(
+            f"🗂️ የተመረጠው ክፍል፦ <b>{category}</b>\n\n🏷️ በመቀጠል እባክዎ የጫማውን ብራንድ (Brand) ይምረጡ፦", 
+            chat_id, 
+            call.message.message_id, 
+            parse_mode="HTML", 
+            reply_markup=markup
+        )
 
-    # 🛡️ STERN NAVIGATION GUARD ለ Brand (ጽሑፍ መፃፍ ክልክል ነው)
+    # 🛡️ STERN NAVIGATION GUARD ለ Brand (ጽሑፍ እንዳይቀበል መከላከያ)
     @bot.message_handler(state=AddProductStates.waiting_for_brand)
     def guard_brand(message):
         chat_id = message.chat.id
@@ -149,7 +162,9 @@ def register_admin_handlers(bot):
             InlineKeyboardButton("Adidas", callback_data="brand_Adidas"),
             InlineKeyboardButton("Puma", callback_data="brand_Puma"),
             InlineKeyboardButton("Reebok", callback_data="brand_Reebok"),
-            InlineKeyboardButton("Jordan", callback_data="brand_Jordan")
+            InlineKeyboardButton("Jordan", callback_data="brand_Jordan"),
+            InlineKeyboardButton("ሀገር በቀል (Local)", callback_data="brand_Local"),
+            InlineKeyboardButton("ሌላ (Other)", callback_data="brand_Other")
         )
         bot.send_message(chat_id, "⚠️ ስህተት፦ እባክዎ በጽሑፍ አይጻፉ! ከላይ ካሉት የብራንድ አዝራሮች አንዱን ይጫኑ፦", reply_markup=markup)
 
@@ -160,7 +175,6 @@ def register_admin_handlers(bot):
         brand_name = call.data.replace("brand_", "")
         bot.answer_callback_query(call.id)
         
-        # ዋጋ ከመጠየቁ በፊት ስቴቱን በግልጽ መቆለፍ
         bot.set_state(chat_id, AddProductStates.waiting_for_price)
 
         with bot.retrieve_data(chat_id) as data:
@@ -169,34 +183,34 @@ def register_admin_handlers(bot):
         bot.edit_message_text(f"🏷️ የተመረጠው ብራንድ፦ <b>{brand_name}</b>", chat_id, call.message.message_id, parse_mode="HTML")
         bot.send_message(chat_id, "💵 ጫማው የሚሸጥበትን መደበኛ ዋጋ በቁጥር ብቻ ያስገቡ (ምሳሌ፦ 3200)፦")
 
-    # 💰 5. የመሸጫ ዋጋ ማረጋገጫ እና የቅናሽ/የድሮ ዋጋ ጥያቄ
+    # 💰 5. የመሸጫ ዋጋ ማረጋገጫ (ወደ Integer መቀየሪያ) እና የቅናሽ ዋጋ ጥያቄ
     @bot.message_handler(state=AddProductStates.waiting_for_price)
     def process_price(message):
         chat_id = message.chat.id
         price_text = message.text.strip()
         
         if not price_text.isdigit() or int(price_text) <= 0:
-            bot.send_message(chat_id, "⚠️ ስህተት፦ እባክዎ የመሸጫ ዋጋውን ከዜሮ በላይ በሆነ ቁጥር ብቻ ያስገቡ፦")
+            bot.send_message(chat_id, "⚠️ ስህተት፦ እባክዎ የመሸጫ ዋጋውን ከዜሮ በላይ በሆነ ሙሉ ቁጥር ብቻ ያስገቡ፦")
             return
         
         bot.set_state(chat_id, AddProductStates.waiting_for_original_price)
 
         with bot.retrieve_data(chat_id) as data:
-            data['base_price'] = float(price_text)
+            data['base_price'] = int(price_text)  # 🎯 የ SQL base_price integer ገደብን ለማክበር
         
         bot.send_message(chat_id, "💰 ለደንበኞች የዋጋ ቅናሽ ለማሳየት የድሮውን ዋጋ (Original Price) ያስገቡ፣ ቅናሽ ከሌለው 0 ይጻፉ፦")
 
-    # 📝 6. የድሮ ዋጋ ማረጋገጫ እና ስለ ጫማው ማብራሪያ ጥያቄ
+    # 📝 6. የድሮ ዋጋ ማረጋገጫ (ወደ Integer መቀየሪያ) እና ማብራሪያ ጥያቄ
     @bot.message_handler(state=AddProductStates.waiting_for_original_price)
     def process_original_price(message):
         chat_id = message.chat.id
         original_text = message.text.strip()
         
         if not original_text.isdigit():
-            bot.send_message(chat_id, "⚠️ ስህተት፦ እባክዎ የድሮውን ዋጋ በቁጥር ብቻ ያስገቡ (ወይም 0 ይጻፉ)፦")
+            bot.send_message(chat_id, "⚠️ እባክዎ የድሮውን ዋጋ በቁጥር ብቻ ያስገቡ (ወይም 0 ይጻፉ)፦")
             return
         
-        original_price = float(original_text)
+        original_price = int(original_text)  # 🎯 የ SQL original_price integer ገደብን ለማክበር
         
         with bot.retrieve_data(chat_id) as data:
             if original_price > 0 and original_price <= data['base_price']:
@@ -205,7 +219,7 @@ def register_admin_handlers(bot):
             data['original_price'] = original_price if original_price > 0 else None
         
         bot.set_state(chat_id, AddProductStates.waiting_for_description)
-        bot.send_message(chat_id, "📝 ስለ ጫማው ጥራት የሚገልጽ አጭር ማብራሪያ ያስገቡ፣ ወይም ለመዝለል <code>skip</code> ይጻፉ፦", parse_mode="HTML")
+        bot.send_message(chat_id, "📝 ስለ ጫማው ጥራት ወይም የተሰራበትን ማቴሪያል የሚገልጽ አጭር ማብራሪያ ያስገቡ፣ ወይም ለመዝለል <code>skip</code> ይጻፉ፦", parse_mode="HTML")
 
     # 📐 7. ማብራሪያ መቀበያ፣ ዋና ምርት መፍጠሪያ እና የመጀመሪያ መጠን (Size) ጥያቄ
     @bot.message_handler(state=AddProductStates.waiting_for_description)
@@ -218,18 +232,18 @@ def register_admin_handlers(bot):
         description = description_text if description_text.lower() != 'skip' else None
         
         processing_admins.add(chat_id)
-        load_msg = bot.send_message(chat_id, "⏳ መረጃው ዳታቤዝ ላይ እየተጫነ ነው...")
+        load_msg = bot.send_message(chat_id, "⏳ መረጃው ከስኬማው ጋር እየተጣጣመ ዳታቤዝ ላይ እየተጫነ ነው...")
 
         try:
             with bot.retrieve_data(chat_id) as data:
-                # 🛑 የካቴጎሪ እና የብራንድ ደህንነት ቼክ (እንዳይዘለሉ)
+                # 🛑 የካቴጎሪ እና የብራንድ ጥበቃ ቼክ (የ SQL NOT NULL ህግ እንዳይጣስ)
                 if not data.get('category') or not data.get('brand'):
                     bot.delete_message(chat_id, load_msg.message_id)
                     bot.send_message(chat_id, "❌ የስቴት ስህተት፦ ካቴጎሪ ወይም ብራንድ አልተመረጠም። እባክዎ ከአዲስ ይጀምሩ።")
                     bot.delete_state(chat_id)
                     return
                 
-                # 🔄 በ database.py ላይ ያለውን የ DatabaseManager ዝግጁ ፈንክሽን መጠቀም
+                # በ database.py ላይ ወዳለው የ Supabase አያያዥ መላክ (እሴቶቹ INT መሆናቸው ተረጋግጧል)
                 product = db.db.add_product(
                     name=data['name'],
                     category=data['category'],
@@ -247,7 +261,7 @@ def register_admin_handlers(bot):
                 data['product_id'] = product['id']
             
             bot.set_state(chat_id, AddProductStates.waiting_for_variant_size)
-            bot.send_message(chat_id, "📐 አሁን ለጫማው ዝርዝር መረጃዎችን እናስገባ።\nየመጀመሪያውን የጫማ መጠን ቁጥር (Size) ያስገቡ (ከ 30 እስከ 50 መካከል)፦")
+            bot.send_message(chat_id, "📐 አሁን ለጫማው ዝርዝር መጠኖችን እናስገባ።\nየመጀመሪያውን የጫማ መጠን ቁጥር (Size) ያስገቡ (ከ 30 እስከ 50 መካከል)፦")
             
         except Exception as e:
             logger.error(f"Error in creating base product: {e}")
@@ -261,21 +275,21 @@ def register_admin_handlers(bot):
             if chat_id in processing_admins:
                 processing_admins.remove(chat_id)
 
-    # 🎨 8. የጫማ መጠን ማረጋገጫ እና ቀለም ጥያቄ
+    # 🎨 8. የጫማ መጠን ማረጋገጫ (CHECK size >= 30 AND size <= 50) እና ቀለም ጥያቄ
     @bot.message_handler(state=AddProductStates.waiting_for_variant_size)
     def process_variant_size(message):
         chat_id = message.chat.id
         size_text = message.text.strip()
         
         if not size_text.isdigit() or int(size_text) < 30 or int(size_text) > 50:
-            bot.send_message(chat_id, "⚠️ ስህተት፦ የጫማ መጠን ቁጥር (Size) ከ 30 እስከ 50 መካከል መሆን አለበት፦")
+            bot.send_message(chat_id, "⚠️ ስህተት፦ የጫማ መጠን ቁጥር (Size) በስኬማው ገደብ መሰረት ከ 30 እስከ 50 መካከል መሆን አለበት፦")
             return
         
         with bot.retrieve_data(chat_id) as data:
             data['variant_size'] = int(size_text)
         
         bot.set_state(chat_id, AddProductStates.waiting_for_variant_color)
-        bot.send_message(chat_id, "🎨 የዚህን መጠን ጫማ ቀለም ያስገቡ (ምሳሌ፦ ጥቁር፣ ነጭ)፦")
+        bot.send_message(chat_id, "🎨 የዚህን መጠን ጫማ ቀለም ያስገቡ (ምчнее፦ ጥቁር፣ ነጭ፣ ሰማያዊ)፦")
 
     # 📦 9. የጫማ ቀለም መቀበያ እና የክምችት (Stock) ብዛት ጥያቄ
     @bot.message_handler(state=AddProductStates.waiting_for_variant_color)
@@ -284,7 +298,7 @@ def register_admin_handlers(bot):
         color = message.text.strip()
         
         if len(color) < 2 or color.isdigit():
-            bot.send_message(chat_id, "⚠️ እባክዎ ትክክለኛ የጫማ ቀለም ስም በፊደላት ብቻ ያስገቡ፦")
+            bot.send_message(chat_id, "⚠️ እባክዎ ትክክለኛ የጫማ ቀለም ስም ያስገቡ፦")
             return
 
         with bot.retrieve_data(chat_id) as data:
@@ -293,14 +307,14 @@ def register_admin_handlers(bot):
         bot.set_state(chat_id, AddProductStates.waiting_for_variant_stock)
         bot.send_message(chat_id, f"📦 በዚሁ መጠን እና ቀለም በሱቅ ውስጥ ያለውን አጠቃላይ የጫማ ክምችት ብዛት (Stock) ያስገቡ፦")
 
-    # 📸 10. የክምችት ማረጋገጫ እና የፎቶ ሊንክ ጥያቄ
+    # 📸 10. የክምችት ማረጋገጫ (CHECK stock >= 0) እና የፎቶ ሊንክ ጥያቄ
     @bot.message_handler(state=AddProductStates.waiting_for_variant_stock)
     def process_variant_stock(message):
         chat_id = message.chat.id
         stock_text = message.text.strip()
         
         if not stock_text.isdigit() or int(stock_text) < 0:
-            bot.send_message(chat_id, "⚠️ ስህተት፦ እባክዎ የክምችት ብዛትን በፖዘቲቭ ቁጥር ብቻ ያስገቡ፦")
+            bot.send_message(chat_id, "⚠️ ስህተት፦ እባክዎ የክምችት ብዛትን ከዜሮ በላይ በሆነ ቁጥር ብቻ ያስገቡ፦")
             return
         
         with bot.retrieve_data(chat_id) as data:
@@ -309,7 +323,7 @@ def register_admin_handlers(bot):
         bot.set_state(chat_id, AddProductStates.waiting_for_variant_image)
         bot.send_message(chat_id, "📸 የጫማውን ፎቶ ሊንክ (Supabase URL) ያስገቡ፣ ፎቶ ከሌለው <code>skip</code> ይጻፉ፦", parse_mode="HTML")
 
-    # ✨ 11. ፎቶ መቀበያ፣ ዝርዝር መረጃውን በዳታቤዝ መጫኛ እና የማጠቃለያ ምርጫ
+    # ✨ 11. ፎቶ መቀበያ፣ ዝርዝር መረጃውን በዳታቤዝ መጫኛ (Product Variant)
     @bot.message_handler(state=AddProductStates.waiting_for_variant_image)
     def process_variant_image(message):
         chat_id = message.chat.id
@@ -336,7 +350,7 @@ def register_admin_handlers(bot):
                         price_display = f"<s>{data['original_price']}</s> {data['base_price']} ETB"
                     
                     success_text = (
-                        f"✅ <b>አዲስ ጫማ በተሳካ ሁኔታ ተመዝግቧል!</b>\n\n"
+                        f"✅ <b>አዲስ ጫማ እና ሳይዝ በተሳካ ሁኔታ ተመዝግቧል!</b>\n\n"
                         f"👟 <b>ሞዴል ስም:</b> {data['name']}\n"
                         f"🏷️ <b>ብራንድ:</b> {data['brand']}\n"
                         f"🗂️ <b>ምድብ:</b> {data['category']}\n"
@@ -352,7 +366,7 @@ def register_admin_handlers(bot):
                         InlineKeyboardButton("➕ ሌላ መጠን/ቀለም አክል", callback_data=f"add_more_variants_{data['product_id']}"),
                         InlineKeyboardButton("✅ ጨርሻለሁ", callback_data="finish_product")
                     )
-                    bot.send_message(chat_id, "💡 ለዚህ ጫማ ሌላ ተጨማሪ መጠን ወይም ቀለም መጨመር ይፈልጋሉ?", reply_markup=markup)
+                    bot.send_message(chat_id, "💡 ለዚህ ጫማ ሌላ ተጨማሪ መጠን (Size) ወይም ቀለም መጨመር ይፈልጋሉ?", reply_markup=markup)
                 else:
                     bot.send_message(chat_id, "❌ ስህተት፦ የጫማውን ዝርዝር መጠን በዳታቤዝ ላይ መጫን አልተሳካም።")
         except Exception as e:
@@ -362,7 +376,7 @@ def register_admin_handlers(bot):
         bot.delete_state(chat_id)
 
     # ======================================================================
-    # ➕ ተጨማሪ የጫማ መጠን እና ቀለም (Variants) የመቀበያ ክፍል
+    # ➕ ተጨማሪ የጫማ መጠን እና ቀለም (Variants) የመቀበያ ገለልተኛ ክፍል
     # ======================================================================
     @bot.callback_query_handler(func=lambda call: call.data.startswith("add_more_variants_"))
     def add_more_variants(call):
@@ -405,7 +419,7 @@ def register_admin_handlers(bot):
         color = message.text.strip()
         
         if len(color) < 2 or color.isdigit():
-            bot.send_message(chat_id, "⚠️ እባክዎ ትክክለኛ የጫማ ቀለም ስም በፊደላት ብቻ ያስገቡ፦")
+            bot.send_message(chat_id, "⚠️ እባክዎ ትክክለኛ የጫማ ቀለም ስም ያስገቡ፦")
             return
 
         with bot.retrieve_data(chat_id) as data:
@@ -451,7 +465,7 @@ def register_admin_handlers(bot):
                 
                 if variant:
                     success_text = (
-                        f"✅ <b>ተጨማሪ የጫማ ዝርዝር በተሳካ ሁኔታ ተቀምጧል!</b>\n\n"
+                        f"✅ <b>ተጨማሪ የጫማ መጠን በተሳካ ሁኔታ ተቀምጧል!</b>\n\n"
                         f"📐 <b>መጠን (Size):</b> {data['variant_size']}\n"
                         f"🎨 <b>ቀለም:</b> {data['variant_color']}\n"
                         f"📦 <b>ክምችት:</b> {data['variant_stock']} ጥንድ"
