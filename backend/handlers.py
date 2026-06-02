@@ -127,25 +127,23 @@ def register_handlers(bot):
                 reply_markup=keyboards.get_category_menu()
             )
 
-        elif text in ["👞 የወንዶች ጫማዎች", "👠 የሴቶች ጫማዎች", "👟 የህፃናት ጫማዎች", "👥 የሁለቱም"]:
-            category_map = {
-                "👞 የወንዶች ጫማዎች": "የወንዶች",
-                "👠 የሴቶች ጫማዎች": "የሴቶች",
-                "👟 የህፃናት ጫማዎች": "የህፃናት",
-                "👥 የሁለቱም": "የሁለቱም"
-            }
-            category = category_map.get(text, "የወንዶች")
+@bot.callback_query_handler(func=lambda call: call.data.startswith("cat_"))
+    def handle_category_selection(call):
+        chat_id = call.message.chat.id
+        # callback_data: "cat_የወንዶች" -> ስለዚህ split("_")[1] ሲደረግ "የወንዶች" ይገኛል
+        category = call.data.split("_")[1] 
+        bot.answer_callback_query(call.id)
 
-            try:
-                products = db.get_products_by_category(category)
-            except Exception as e:
-                logger.error(f"Failed to fetch products for {category}: {e}")
-                bot.send_message(chat_id, "❌ መረጃዎችን ከማውጫው ላይ ማግኘት አልተሳካም። እባክዎ ትንሽ ቆይተው ይሞክሩ።")
-                return
+        try:
+            products = db.get_products_by_category(category)
+        except Exception as e:
+            logger.error(f"Failed to fetch products for {category}: {e}")
+            bot.send_message(chat_id, "❌ መረጃዎችን ማግኘት አልተሳካም።")
+            return
 
-            if not products:
-                bot.send_message(chat_id, f"⚠️ በአሁኑ ሰዓት በ '{category}' ምድብ ስር ምንም ምርት የለም።")
-                return
+        if not products:
+            bot.send_message(chat_id, f"⚠️ በአሁኑ ሰዓት በ '{category}' ምድብ ምንም ምርት የለም።")
+            return
 
             for product in products[:10]:
                 variants = product.get('product_variants', [])

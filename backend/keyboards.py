@@ -40,17 +40,14 @@ def get_admin_panel_keyboard():
     return keyboard
 
 def get_category_menu():
-    """Get category selection inline keyboard - Matched with handlers.py"""
-    keyboard = types.InlineKeyboardMarkup(row_width=2)
-    keyboard.add(
-        types.InlineKeyboardButton("👞 የወንዶች ጫማዎች", callback_data="cat_የወንዶች"),
-        types.InlineKeyboardButton("👠 የሴቶች ጫማዎች", callback_data="cat_የሴቶች")
-    )
-    keyboard.add(
-        types.InlineKeyboardButton("👟 የህፃናት ጫማዎች", callback_data="cat_የህፃናት"),
+    markup = types.InlineKeyboardMarkup(row_width=2)
+    markup.add(
+        types.InlineKeyboardButton("👞 የወንዶች", callback_data="cat_የወንዶች"),
+        types.InlineKeyboardButton("👠 የሴቶች", callback_data="cat_የሴቶች"),
+        types.InlineKeyboardButton("👟 የህፃናት", callback_data="cat_የህፃናት"),
         types.InlineKeyboardButton("👥 የሁለቱም", callback_data="cat_የሁለቱም")
     )
-    return keyboard
+    return markup
 
 def get_product_detail_keyboard(product_id):
     """Get product detail inline keyboard."""
