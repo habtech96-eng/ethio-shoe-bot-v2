@@ -40,15 +40,15 @@ def get_admin_panel_keyboard():
     return keyboard
 
 def get_category_menu():
-    """Get category selection inline keyboard."""
+    """Get category selection inline keyboard - Matched with handlers.py"""
     keyboard = types.InlineKeyboardMarkup(row_width=2)
     keyboard.add(
-        types.InlineKeyboardButton("👞 የወንዶች ጫማዎች", callback_data="cat_men"),
-        types.InlineKeyboardButton("👠 የሴቶች ጫማዎች", callback_data="cat_women")
+        types.InlineKeyboardButton("👞 የወንዶች ጫማዎች", callback_data="cat_የወንዶች"),
+        types.InlineKeyboardButton("👠 የሴቶች ጫማዎች", callback_data="cat_የሴቶች")
     )
     keyboard.add(
-        types.InlineKeyboardButton("👟 የህፃናት ጫማዎች", callback_data="cat_kids"),
-        types.InlineKeyboardButton("👥 የሁለቱም", callback_data="cat_unisex")
+        types.InlineKeyboardButton("👟 የህፃናት ጫማዎች", callback_data="cat_የህፃናት"),
+        types.InlineKeyboardButton("👥 የሁለቱም", callback_data="cat_የሁለቱም")
     )
     return keyboard
 
@@ -81,11 +81,11 @@ def get_color_selection_keyboard(product_id, size, colors):
     return keyboard
 
 def get_cart_checkout_keyboard():
-    """Get cart checkout inline keyboard."""
+    """Get cart checkout inline keyboard - Fixed mixed button types"""
     keyboard = types.InlineKeyboardMarkup(row_width=2)
     keyboard.add(
-        types.InlineKeyboardButton("✅ ማረጋጫ (Checkout)", callback_data="checkout"),
-        types.KeyboardButton("🗑️ ጋሪውን አጽዳ")
+        types.InlineKeyboardButton("✅ ማረጋገጫ (Checkout)", callback_data="checkout"),
+        types.InlineKeyboardButton("🗑️ ጋሪውን አጽዳ", callback_data="clear_cart_action")
     )
     return keyboard
 

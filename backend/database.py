@@ -562,6 +562,27 @@ class DatabaseManager:
             logger.error(f"Error getting payment: {e}")
             return None
 
+    def get_payment(self, payment_id: str) -> Optional[Dict[str, Any]]:
+        """Get a specific payment record by its ID"""
+        try:
+            result = self.client.table('payments').select('*').eq('id', payment_id).execute()
+            return result.data[0] if result.data else None
+        except Exception as e:
+            logger.error(f"Error getting payment by ID: {e}")
+            return None
+
+    def update_payment_status(self, payment_id: str, status: str) -> bool:
+        """Update payment status or verification state"""
+        try:
+            # If rejected, we might log it or handle verification flags
+            result = self.client.table('payments').update({
+                'is_verified': False, 
+                'updated_at': self._get_current_time()
+            }).eq('id', payment_id).execute()
+            return True
+        except Exception as e:
+            logger.error(f"Error updating payment status: {e}")
+            return False
     # ============================================================
     # REVIEW MANAGEMENT
     # ============================================================

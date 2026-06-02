@@ -359,6 +359,18 @@ def register_handlers(bot):
             logger.error(f"Failed handling cart transaction sequence: {e}")
             bot.send_message(chat_id, "❌ ምርቱን ወደ ጋሪ መጫን አልተሳካም።")
 
+@bot.callback_query_handler(func=lambda call: call.data == "clear_cart_action")
+    def handle_clear_cart(call):
+        chat_id = call.message.chat.id
+        user = db.get_user(call.from_user.id)
+        
+        if user:
+            db.clear_cart(user['id'])
+            bot.answer_callback_query(call.id, "🗑️ ጋሪዎ በተሳካ ሁኔታ ጸድቷል!")
+            bot.edit_message_text("🛒 ጋሪዎ ባዶ ተደርጓል፤ አዳዲስ ምርቶችን መምረጥ ይችላሉ።", chat_id, call.message.message_id)
+        else:
+            bot.answer_callback_query(call.id, "⚠️ ስህተት ተከስቷል።")
+
     @bot.callback_query_handler(func=lambda call: call.data == "admin_view_orders")
     def admin_view_orders(call):
         telegram_id = call.from_user.id
