@@ -1,19 +1,15 @@
 # backend/__init__.py
-# This file marks the backend directory as a Python package
-# and exports all necessary functions for easy importing from parent
+# Marks the backend directory as a Python package.
+# Re-exports registration functions for bot.py to import cleanly.
+# Does NOT create a second DatabaseManager — use db.db from database.py directly.
 
-# Import all handler registration functions from submodules
 from .handlers import register_handlers
 from .admin import register_admin_handlers
 from .orders import register_order_handlers
-from .database import supabase, DatabaseManager
+from .database import supabase, DatabaseManager, db
 from . import keyboards
 from . import receipt
 
-# Initialize database manager instance
-db = DatabaseManager()
-
-# Export all functions and modules
 __all__ = [
     'register_handlers',
     'register_admin_handlers',
@@ -22,5 +18,5 @@ __all__ = [
     'keyboards',
     'receipt',
     'supabase',
-    'DatabaseManager'
+    'DatabaseManager',
 ]

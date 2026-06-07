@@ -126,7 +126,20 @@ def initialize_bot():
         # Add custom filters for state handling
         bot.add_custom_filter(custom_filters.StateFilter(bot))
 
-        # Register all handlers
+        # Global exception handler — prevents silent update drops
+        @bot.middleware_handler(update_types=['message', 'callback_query'])
+        def log_all_updates(bot_instance, update):
+            pass  # Allow all updates through; errors are caught below
+
+        def handle_exception(exception):
+            logger.error(f"Handler exception: {exception}", exc_info=True)
+
+        bot.exception_handler = handle_exception
+
+        # Register all handlers in strict order:
+        # 1. Admin (state-scoped handlers first)
+        # 2. Orders (state-scoped handlers second)
+        # 3. General (catch-all registered last)
         logger.info("📦 Registering bot handlers...")
         register_admin_handlers(bot)
         register_order_handlers(bot)

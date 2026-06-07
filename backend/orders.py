@@ -2,14 +2,17 @@
 Order management handlers for Ethio Shoe Store.
 Handles checkout from cart, address collection, payment method selection,
 transaction reference submission, and admin payment verification.
-All database calls go through db.db (the DatabaseManager singleton).
+State management uses (from_user.id, chat_id) correctly for pyTelegramBotAPI 4.x.
 """
 import sys
 import os
 import logging
 import telebot
 from telebot.handler_backends import State, StatesGroup
-from telebot.types import InlineKeyboardMarkup, InlineKeyboardButton, ReplyKeyboardMarkup, KeyboardButton
+from telebot.types import (
+    InlineKeyboardMarkup, InlineKeyboardButton,
+    ReplyKeyboardMarkup, KeyboardButton, ReplyKeyboardRemove
+)
 
 from . import database as db
 from .receipt import generate_receipt_image
@@ -32,40 +35,41 @@ CBE_ACCOUNT    = os.getenv('PAYMENT_CBE_ACCOUNT',    '1000274286637')
 
 
 class CustomerOrderStates(StatesGroup):
-    waiting_for_phone          = State()
-    waiting_for_address_choice = State()
-    waiting_for_city           = State()
-    waiting_for_subcity        = State()
-    waiting_for_payment_method = State()
+    waiting_for_phone           = State()
+    waiting_for_address_choice  = State()
+    waiting_for_city            = State()
+    waiting_for_subcity         = State()
+    waiting_for_payment_method  = State()
     waiting_for_transaction_ref = State()
 
 
 def register_order_handlers(bot):
 
     # ----------------------------------------------------------------
-    # Checkout trigger — fired from the cart "Checkout" button
+    # Checkout — triggered from cart "Checkout" inline button
     # ----------------------------------------------------------------
 
     @bot.callback_query_handler(func=lambda call: call.data == "checkout")
     def start_checkout(call):
-        chat_id = call.message.chat.id
+        chat_id     = call.message.chat.id
         telegram_id = call.from_user.id
         bot.answer_callback_query(call.id)
 
         user = db.db.get_user(telegram_id)
         if not user:
-            user = db.db.create_user(telegram_id, call.from_user.first_name, call.from_user.username)
+            user = db.db.create_user(telegram_id,
+                                     call.from_user.first_name,
+                                     call.from_user.username)
             if not user:
-                bot.send_message(chat_id, "❌ ስህተት። /start ን ጫኑ እና ደግመው ይሞክሩ።")
+                bot.send_message(chat_id, "❌ ስህተት። /start ን ጫኑ።")
                 return
 
         cart_items = db.db.get_cart_items(user['id'])
         if not cart_items:
-            bot.send_message(chat_id, "🛒 ጋሪዎ ባዶ ነው። ምርቶችን ይምረጡ።")
+            bot.send_message(chat_id, "🛒 ጋሪዎ ባዶ ነው።")
             return
 
-        # Compute totals now so we can store them in state
-        subtotal = 0
+        subtotal        = 0
         order_items_data = []
         for item in cart_items:
             variant = item.get('product_variants') or {}
@@ -75,9 +79,9 @@ def register_order_handlers(bot):
             if isinstance(product, list):
                 product = product[0] if product else {}
 
-            qty        = int(item.get('quantity', 1))
-            price      = int(product.get('base_price', 0))
-            subtotal  += price * qty
+            qty   = int(item.get('quantity', 1))
+            price = int(product.get('base_price', 0))
+            subtotal += price * qty
             order_items_data.append({
                 'product_name':  product.get('name', 'ጫማ'),
                 'size':          int(variant.get('size', 38)),
@@ -87,23 +91,29 @@ def register_order_handlers(bot):
             })
 
         delivery_fee = 50
-        total = subtotal + delivery_fee
+        total        = subtotal + delivery_fee
 
         bot.set_state(telegram_id, CustomerOrderStates.waiting_for_phone, chat_id)
         with bot.retrieve_data(telegram_id, chat_id) as data:
-            data['user_id']         = user['id']
-            data['order_items']     = order_items_data
-            data['subtotal']        = subtotal
-            data['delivery_fee']    = delivery_fee
-            data['total']           = total
-            data['customer_name']   = f"{call.from_user.first_name or ''} {call.from_user.last_name or ''}".strip()
+            data['user_id']       = user['id']
+            data['order_items']   = order_items_data
+            data['subtotal']      = subtotal
+            data['delivery_fee']  = delivery_fee
+            data['total']         = total
+            data['customer_name'] = (
+                f"{call.from_user.first_name or ''} {call.from_user.last_name or ''}".strip()
+            )
 
         markup = ReplyKeyboardMarkup(resize_keyboard=True, one_time_keyboard=True)
         markup.add(KeyboardButton("📱 ስልኬን ላክ", request_contact=True))
         bot.send_message(
             chat_id,
-            f"✅ ጋሪዎ:\n💰 ድምር: {subtotal} ETB\n🚚 ማድረሻ: {delivery_fee} ETB\n"
-            f"💵 ጠቅላላ: {total} ETB\n\n📱 ስልክ ቁጥርዎን ያጋሩ ወይም በጽሑፍ ያስገቡ፦",
+            f"✅ <b>ጋሪ ማጠቃለያ</b>\n\n"
+            f"💵 ድምር: {subtotal} ETB\n"
+            f"🚚 ማድረሻ: {delivery_fee} ETB\n"
+            f"💰 <b>ጠቅላላ: {total} ETB</b>\n\n"
+            f"📱 ስልክ ቁጥርዎን ያጋሩ ወይም በጽሑፍ ያስገቡ፦",
+            parse_mode="HTML",
             reply_markup=markup
         )
 
@@ -112,28 +122,28 @@ def register_order_handlers(bot):
     @bot.message_handler(state=CustomerOrderStates.waiting_for_phone,
                          content_types=['contact', 'text'])
     def process_phone(message):
-        chat_id = message.chat.id
+        chat_id     = message.chat.id
         telegram_id = message.from_user.id
 
         if message.content_type == 'contact' and message.contact:
             phone = message.contact.phone_number
         else:
             phone = message.text.strip() if message.text else ''
-            if not phone or len(phone) < 9:
+            if not phone or len(phone) < 7:
                 bot.send_message(chat_id, "⚠️ ትክክለኛ ስልክ ቁጥር ያስገቡ፦")
                 return
 
         with bot.retrieve_data(telegram_id, chat_id) as data:
             data['phone'] = phone
-            user_id = data['user_id']
+            user_id       = data['user_id']
 
-        # Check for saved addresses
         addresses = db.db.get_user_addresses(user_id)
         if addresses:
             markup = InlineKeyboardMarkup(row_width=1)
             for addr in addresses:
                 loc = f"{addr['city']} - {addr.get('subcity_or_zone', '')}".strip(' -')
-                markup.add(InlineKeyboardButton(f"📍 {loc}", callback_data=f"addr_{addr['id']}"))
+                markup.add(InlineKeyboardButton(f"📍 {loc}",
+                                                callback_data=f"addr_{addr['id']}"))
             markup.add(InlineKeyboardButton("➕ አዲስ አድራሻ", callback_data="addr_new"))
             bot.set_state(telegram_id, CustomerOrderStates.waiting_for_address_choice, chat_id)
             bot.send_message(chat_id, "📍 አድራሻ ይምረጡ ወይም አዲስ ያስገቡ፦",
@@ -146,7 +156,7 @@ def register_order_handlers(bot):
     @bot.callback_query_handler(func=lambda call: call.data.startswith("addr_"),
                                  state=CustomerOrderStates.waiting_for_address_choice)
     def handle_address_choice(call):
-        chat_id = call.message.chat.id
+        chat_id     = call.message.chat.id
         telegram_id = call.from_user.id
         bot.answer_callback_query(call.id)
 
@@ -166,11 +176,12 @@ def register_order_handlers(bot):
         bot.set_state(telegram_id, CustomerOrderStates.waiting_for_city, chat_id)
         bot.send_message(chat_id, "🏙️ ከተማ ይምረጡ፦", reply_markup=markup)
 
-    @bot.message_handler(state=CustomerOrderStates.waiting_for_city)
+    @bot.message_handler(state=CustomerOrderStates.waiting_for_city,
+                         content_types=['text'])
     def process_city(message):
-        chat_id = message.chat.id
+        chat_id     = message.chat.id
         telegram_id = message.from_user.id
-        city = message.text.strip()
+        city        = message.text.strip() if message.text else ""
 
         if city not in ALLOWED_CITIES:
             markup = ReplyKeyboardMarkup(resize_keyboard=True, one_time_keyboard=True, row_width=2)
@@ -182,16 +193,15 @@ def register_order_handlers(bot):
             data['city'] = city
 
         bot.set_state(telegram_id, CustomerOrderStates.waiting_for_subcity, chat_id)
-        from telebot.types import ReplyKeyboardRemove
-        bot.send_message(chat_id,
-            "📍 ሰፈር / ወረዳ ያስገቡ (ምሳሌ: Bole, Woreda 03)፦",
-            reply_markup=ReplyKeyboardRemove())
+        bot.send_message(chat_id, "📍 ሰፈር / ወረዳ ያስገቡ (ምሳሌ: Bole, Woreda 03)፦",
+                         reply_markup=ReplyKeyboardRemove())
 
-    @bot.message_handler(state=CustomerOrderStates.waiting_for_subcity)
+    @bot.message_handler(state=CustomerOrderStates.waiting_for_subcity,
+                         content_types=['text'])
     def process_subcity(message):
-        chat_id = message.chat.id
+        chat_id     = message.chat.id
         telegram_id = message.from_user.id
-        subcity = message.text.strip()
+        subcity     = message.text.strip() if message.text else ""
 
         with bot.retrieve_data(telegram_id, chat_id) as data:
             user_id = data['user_id']
@@ -205,7 +215,8 @@ def register_order_handlers(bot):
             is_default=False,
         )
         if not address:
-            bot.send_message(chat_id, "❌ አድራሻ ማስቀመጥ አልተሳካም። ደግመው ይሞክሩ።")
+            bot.send_message(chat_id, "❌ አድራሻ ማስቀመጥ አልተሳካም። ደግሞ ይሞክሩ።")
+            bot.delete_state(telegram_id, chat_id)
             return
 
         with bot.retrieve_data(telegram_id, chat_id) as data:
@@ -227,14 +238,13 @@ def register_order_handlers(bot):
     @bot.callback_query_handler(func=lambda call: call.data.startswith("pay_"),
                                  state=CustomerOrderStates.waiting_for_payment_method)
     def select_payment_method(call):
-        chat_id = call.message.chat.id
+        chat_id     = call.message.chat.id
         telegram_id = call.from_user.id
-        method = call.data.replace("pay_", "", 1)
+        method      = call.data.replace("pay_", "", 1)
 
         if method not in ('telebirr', 'cbe'):
-            bot.answer_callback_query(call.id, "⚠️ ያልታወቀ የክፍያ ዘዴ።", show_alert=True)
+            bot.answer_callback_query(call.id, "⚠️ ያልታወቀ ዘዴ።", show_alert=True)
             return
-
         bot.answer_callback_query(call.id)
 
         with bot.retrieve_data(telegram_id, chat_id) as data:
@@ -244,45 +254,46 @@ def register_order_handlers(bot):
             total        = data['total']
             items        = data.get('order_items', [])
 
-        items_text = ""
-        for it in items:
-            items_text += f"  • {it['product_name']} (Size {it['size']}, {it['color']}) x{it['quantity']} — {it['price_per_unit']} ETB\n"
+        items_text = "".join(
+            f"  • {it['product_name']} (Size {it['size']}, {it['color']}) "
+            f"x{it['quantity']} — {it['price_per_unit']} ETB\n"
+            for it in items
+        )
 
         if method == "telebirr":
             instructions = (
-                f"📱 <b>Telebirr Payment</b>\n"
-                f"ስልክ ቁጥር: <code>{TELEBIRR_PHONE}</code>\n\n"
-                f"ክፍያ ከፍጸሙ በኋላ <b>Transaction Reference</b> ቁጥሩን ያስገቡ፦"
+                f"📱 <b>Telebirr</b>\n"
+                f"ስልክ: <code>{TELEBIRR_PHONE}</code>\n\n"
+                f"ክፍያ ከፈጸሙ በኋላ <b>Transaction Reference</b> ያስገቡ፦"
             )
         else:
             instructions = (
                 f"🏦 <b>CBE Bank Transfer</b>\n"
                 f"Account: <code>{CBE_ACCOUNT}</code>\n\n"
-                f"ክፍያ ከፍጸሙ በኋላ <b>Transaction Reference</b> ቁጥሩን ያስገቡ፦"
+                f"ክፍያ ከፈጸሙ በኋላ <b>Transaction Reference</b> ያስገቡ፦"
             )
 
-        summary = (
+        bot.send_message(chat_id,
             f"🧾 <b>የትዕዛዝ ማጠቃለያ</b>\n\n"
             f"{items_text}\n"
             f"💵 ድምር: {subtotal} ETB\n"
             f"🚚 ማድረሻ: {delivery_fee} ETB\n"
             f"💰 <b>ጠቅላላ: {total} ETB</b>\n\n"
-            f"{instructions}"
-        )
-
-        bot.send_message(chat_id, summary, parse_mode="HTML")
+            f"{instructions}",
+            parse_mode="HTML")
         bot.set_state(telegram_id, CustomerOrderStates.waiting_for_transaction_ref, chat_id)
 
     # ---------------------------------------------------------------- transaction reference
 
-    @bot.message_handler(state=CustomerOrderStates.waiting_for_transaction_ref)
+    @bot.message_handler(state=CustomerOrderStates.waiting_for_transaction_ref,
+                         content_types=['text'])
     def process_transaction_ref(message):
-        chat_id = message.chat.id
+        chat_id     = message.chat.id
         telegram_id = message.from_user.id
-        transaction_ref = message.text.strip()
+        txn_ref     = message.text.strip() if message.text else ""
 
-        if len(transaction_ref) < 4:
-            bot.send_message(chat_id, "⚠️ ትክክለኛ Reference ቁጥር ያስገቡ፦")
+        if len(txn_ref) < 4:
+            bot.send_message(chat_id, "⚠️ ትክክለኛ Reference ቁጥር ያስገቡ (ቢያንስ 4 ፊደላት)፦")
             return
 
         with bot.retrieve_data(telegram_id, chat_id) as data:
@@ -297,7 +308,7 @@ def register_order_handlers(bot):
             customer_name  = data.get('customer_name', 'Customer')
 
         if not address_id:
-            bot.send_message(chat_id, "❌ አድራሻ አልተቀመጠም። ደግሞ ይሞክሩ።")
+            bot.send_message(chat_id, "❌ አድራሻ አልተቀመጠም። /start ን ጫኑ።")
             bot.delete_state(telegram_id, chat_id)
             return
 
@@ -320,66 +331,64 @@ def register_order_handlers(bot):
         payment = db.db.create_payment(
             order_id=order['id'],
             payment_method=payment_method,
-            transaction_reference=transaction_ref,
+            transaction_reference=txn_ref,
         )
 
         if not payment:
             bot.send_message(chat_id,
-                "⚠️ ትዕዛዙ ተቀምጧል ነገር ግን የክፍያ ማስረጃ ማስቀመጥ አልተሳካም። Admin ያነጋግሩ።")
-        else:
-            # Clear the cart now that the order is placed
-            db.db.clear_cart(user_id)
+                "⚠️ ትዕዛዙ ተቀምጧል ነገር ግን ክፍያ ማስቀመጥ አልተሳካም። Admin ያነጋግሩ።")
+            bot.delete_state(telegram_id, chat_id)
+            return
 
-            bot.send_message(
-                chat_id,
-                f"✅ <b>ትዕዛዝዎ ተቀምጧል!</b>\n\n"
-                f"🆔 Order ID: <code>#{order['id'][:8]}</code>\n"
-                f"💰 ጠቅላላ: {total} ETB\n"
-                f"💳 ክፍያ: {payment_method.upper()}\n\n"
-                f"⏳ ክፍያዎ ከተረጋገጠ በኋላ ምርትዎ ይላካል።",
-                parse_mode="HTML"
-            )
+        db.db.clear_cart(user_id)
 
-            # Notify admins
-            items_summary = ", ".join(
-                f"{it['product_name']} ({it['size']}/{it['color']})" for it in order_items
-            )
-            admin_text = (
-                f"🆕 <b>አዲስ ትዕዛዝ!</b>\n\n"
-                f"🆔 Order: <code>#{order['id'][:8]}</code>\n"
-                f"👤 {customer_name}\n"
-                f"📞 {phone}\n"
-                f"👟 {items_summary}\n"
-                f"💳 {payment_method.upper()} | Ref: <code>{transaction_ref}</code>\n"
-                f"💰 {total} ETB"
-            )
-            markup = InlineKeyboardMarkup(row_width=2)
-            markup.add(
-                InlineKeyboardButton("✅ Verify Payment", callback_data=f"verify_pay_{payment['id']}"),
-                InlineKeyboardButton("❌ Reject",         callback_data=f"reject_pay_{payment['id']}"),
-            )
-            for admin_id in ADMIN_IDS:
-                try:
-                    bot.send_message(admin_id, admin_text, parse_mode="HTML", reply_markup=markup)
-                except Exception as e:
-                    logger.error(f"Admin notification failed for {admin_id}: {e}")
+        bot.send_message(chat_id,
+            f"✅ <b>ትዕዛዝዎ ተቀምጧል!</b>\n\n"
+            f"🆔 Order: <code>#{order['id'][:8]}</code>\n"
+            f"💰 ጠቅላላ: {total} ETB\n"
+            f"💳 ክፍያ: {payment_method.upper()}\n\n"
+            f"⏳ ክፍያዎ ከተረጋገጠ በኋላ ምርትዎ ይላካል።",
+            parse_mode="HTML", reply_markup=ReplyKeyboardRemove())
+
+        items_summary = ", ".join(
+            f"{it['product_name']} ({it['size']}/{it['color']})" for it in order_items
+        )
+        admin_text = (
+            f"🆕 <b>አዲስ ትዕዛዝ!</b>\n\n"
+            f"🆔 <code>#{order['id'][:8]}</code>\n"
+            f"👤 {customer_name} | 📞 {phone}\n"
+            f"👟 {items_summary}\n"
+            f"💳 {payment_method.upper()} Ref: <code>{txn_ref}</code>\n"
+            f"💰 {total} ETB"
+        )
+        markup = InlineKeyboardMarkup(row_width=2)
+        markup.add(
+            InlineKeyboardButton("✅ Verify Payment",
+                                 callback_data=f"verify_pay_{payment['id']}"),
+            InlineKeyboardButton("❌ Reject",
+                                 callback_data=f"reject_pay_{payment['id']}"),
+        )
+        for admin_id in ADMIN_IDS:
+            try:
+                bot.send_message(admin_id, admin_text, parse_mode="HTML", reply_markup=markup)
+            except Exception as e:
+                logger.error(f"Admin notification failed {admin_id}: {e}")
 
         bot.delete_state(telegram_id, chat_id)
 
-    # ---------------------------------------------------------------- payment verification (admin)
+    # ---------------------------------------------------------------- admin: verify payment
 
     @bot.callback_query_handler(func=lambda call: call.data.startswith("verify_pay_"))
     def verify_payment(call):
         if call.from_user.id not in ADMIN_IDS:
             bot.answer_callback_query(call.id, "❌ አልተፈቀደም!", show_alert=True)
             return
-
         payment_id = call.data.replace("verify_pay_", "", 1)
         bot.answer_callback_query(call.id, "✅ ክፍያ ተረጋግጧል!")
 
         payment = db.db.verify_payment(payment_id, call.from_user.id)
         if not payment:
-            bot.edit_message_text("❌ ክፍያ ለማረጋገጥ አልተሳካም።",
+            bot.edit_message_text("❌ ለማረጋገጥ አልተሳካም።",
                                   call.message.chat.id, call.message.message_id)
             return
 
@@ -391,34 +400,30 @@ def register_order_handlers(bot):
             tg_id = user_data.get('telegram_id') if isinstance(user_data, dict) else None
             if tg_id:
                 try:
-                    bot.send_message(
-                        tg_id,
-                        f"✅ <b>ክፍያዎ ተረጋግጧል!</b>\n\nትዕዛዝ <code>#{payment['order_id'][:8]}</code> ተረጋግጧል። "
+                    bot.send_message(tg_id,
+                        f"✅ <b>ክፍያዎ ተረጋግጧል!</b>\n\n"
+                        f"ትዕዛዝ <code>#{payment['order_id'][:8]}</code> ተረጋግጧል። "
                         f"በቅርቡ አድራሻዎ ላይ ያደርሳሉ።",
-                        parse_mode="HTML"
-                    )
-                    # Send receipt if available
+                        parse_mode="HTML")
                     receipt_path = generate_receipt_image(order)
                     if receipt_path and os.path.exists(receipt_path):
                         with open(receipt_path, 'rb') as f:
                             bot.send_photo(tg_id, f, caption="🧾 የክፍያ ደረሰኝ።")
                         os.remove(receipt_path)
                 except Exception as e:
-                    logger.error(f"Customer notification failed for {tg_id}: {e}")
+                    logger.error(f"Customer notify failed {tg_id}: {e}")
 
         bot.edit_message_text(
             f"✅ Payment <code>{payment_id[:8]}</code> verified.",
-            call.message.chat.id, call.message.message_id, parse_mode="HTML"
-        )
+            call.message.chat.id, call.message.message_id, parse_mode="HTML")
 
-    # ---------------------------------------------------------------- payment rejection (admin)
+    # ---------------------------------------------------------------- admin: reject payment
 
     @bot.callback_query_handler(func=lambda call: call.data.startswith("reject_pay_"))
     def reject_payment(call):
         if call.from_user.id not in ADMIN_IDS:
             bot.answer_callback_query(call.id, "❌ አልተፈቀደም!", show_alert=True)
             return
-
         payment_id = call.data.replace("reject_pay_", "", 1)
         bot.answer_callback_query(call.id, "❌ ውድቅ ተደርጓል።")
 
@@ -426,23 +431,20 @@ def register_order_handlers(bot):
         if payment:
             db.db.update_payment_status(payment_id, False)
             db.db.update_order_status(payment['order_id'], 'cancelled')
-
             order = db.db.get_order(payment['order_id'])
             if order:
                 user_data = order.get('users') or {}
                 tg_id = user_data.get('telegram_id') if isinstance(user_data, dict) else None
                 if tg_id:
                     try:
-                        bot.send_message(
-                            tg_id,
-                            f"❌ <b>ክፍያ ውድቅ ተደርጓል።</b>\n\nለትዕዛዝ <code>#{payment['order_id'][:8]}</code> "
-                            f"ያስገቡት Reference ቁጥር ተቀባይነት አላገኘም። ደግሞ ይሞክሩ ወይም Admin ያነጋግሩ።",
-                            parse_mode="HTML"
-                        )
+                        bot.send_message(tg_id,
+                            f"❌ <b>ክፍያ ውድቅ ተደርጓል።</b>\n\n"
+                            f"ትዕዛዝ <code>#{payment['order_id'][:8]}</code> Reference ተቀባይነት አላገኘም። "
+                            f"ደግሞ ይሞክሩ ወይም Admin ያነጋግሩ።",
+                            parse_mode="HTML")
                     except Exception as e:
-                        logger.error(f"Rejection notification failed for {tg_id}: {e}")
+                        logger.error(f"Rejection notify failed {tg_id}: {e}")
 
         bot.edit_message_text(
             f"❌ Payment <code>{payment_id[:8]}</code> rejected.",
-            call.message.chat.id, call.message.message_id, parse_mode="HTML"
-        )
+            call.message.chat.id, call.message.message_id, parse_mode="HTML")

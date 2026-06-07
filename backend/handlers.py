@@ -5,7 +5,6 @@ Handles /start, category browsing, product display, cart, and order history.
 import sys
 import os
 import logging
-from datetime import datetime
 from telebot import types
 
 from . import keyboards
@@ -26,7 +25,7 @@ def register_handlers(bot):
 
     @bot.message_handler(commands=['start'])
     def send_welcome(message):
-        chat_id    = message.chat.id
+        chat_id     = message.chat.id
         telegram_id = message.from_user.id
         first_name  = message.from_user.first_name or "Customer"
         username    = message.from_user.username
@@ -50,13 +49,18 @@ def register_handlers(bot):
     def show_cart_cmd(message):
         _show_cart(bot, message.chat.id, message.from_user.id)
 
-    # ---------------------------------------------------------------- text menu
+    # ----------------------------------------------------------------
+    # Main menu text handler.
+    # CRITICAL: content_types=['text'] prevents firing on photos/contacts.
+    # state=None ensures this ONLY fires when user has NO active state,
+    # preventing it from swallowing checkout/admin state inputs.
+    # ----------------------------------------------------------------
 
-    @bot.message_handler(func=lambda message: True)
+    @bot.message_handler(content_types=['text'], func=lambda message: True, state=None)
     def handle_text(message):
         chat_id     = message.chat.id
         telegram_id = message.from_user.id
-        text        = message.text.strip() if message.text else ""
+        text        = message.text.strip()
 
         if text == "🔐 Admin Panel":
             if telegram_id in ADMIN_IDS:
@@ -83,6 +87,10 @@ def register_handlers(bot):
         elif text == "🛍️ የእኔ ትዕዛዞች":
             _show_my_orders(bot, chat_id, telegram_id)
 
+        else:
+            mk = keyboards.get_admin_main_menu() if telegram_id in ADMIN_IDS else keyboards.get_main_menu()
+            bot.send_message(chat_id, "🏠 ከዚህ ካሉት አዝራሮች ይምረጡ፦", reply_markup=mk)
+
     # ---------------------------------------------------------------- helpers
 
     def _show_cart(bot, chat_id, telegram_id):
@@ -96,8 +104,8 @@ def register_handlers(bot):
             bot.send_message(chat_id, "🛒 ጋሪዎ ባዶ ነው።")
             return
 
-        total = 0
-        text  = "🛒 <b>የእርስዎ ጋሪ፦</b>\n\n"
+        total     = 0
+        cart_text = "🛒 <b>የእርስዎ ጋሪ፦</b>\n\n"
 
         for item in cart_items:
             variant = item.get('product_variants') or {}
@@ -108,21 +116,20 @@ def register_handlers(bot):
                 product = product[0] if product else {}
 
             qty      = int(item.get('quantity', 1))
-            price    = int(product.get('base_price', 0))
+            price    = int(product.get('base_price', 0)) if product else 0
             subtotal = price * qty
             total   += subtotal
 
             if product:
-                text += (
+                cart_text += (
                     f"👟 <b>{product.get('name', 'ጫማ')}</b>\n"
                     f"   📐 Size: {variant.get('size', 'N/A')}\n"
                     f"   🎨 Color: {variant.get('color', 'N/A')}\n"
                     f"   📦 Qty: {qty} | 💵 {subtotal} ETB\n\n"
                 )
 
-        text += f"💰 <b>ጠቅላላ: {total} ETB</b>"
-
-        bot.send_message(chat_id, text, parse_mode="HTML",
+        cart_text += f"💰 <b>ጠቅላላ: {total} ETB</b>"
+        bot.send_message(chat_id, cart_text, parse_mode="HTML",
                          reply_markup=keyboards.get_cart_checkout_keyboard())
 
     def _show_my_orders(bot, chat_id, telegram_id):
@@ -146,32 +153,26 @@ def register_handlers(bot):
 
         bot.send_message(chat_id, "🛍️ <b>የእርስዎ ትዕዛዞች፦</b>", parse_mode="HTML")
         for order in orders:
-            status  = STATUS_MAP.get(order.get('order_status', 'pending'), 'ያልታወቀ')
+            status   = STATUS_MAP.get(order.get('order_status', 'pending'), 'ያልታወቀ')
             short_id = str(order.get('id', ''))[:8]
-
             order_text = (
                 f"🆔 <b>#{short_id}</b>\n"
                 f"💰 {order.get('total_amount', 0)} ETB\n"
                 f"🚦 {status}"
             )
-
-            # Show "Pay now" button for pending orders that have no verified payment
             markup = types.InlineKeyboardMarkup()
             if order.get('order_status') == 'pending':
                 markup.add(types.InlineKeyboardButton(
                     "💳 ክፍያ Reference ያስገቡ",
                     callback_data=f"pending_pay_{order['id']}"
                 ))
-
             bot.send_message(chat_id, order_text, parse_mode="HTML", reply_markup=markup)
 
     # ---------------------------------------------------------------- category callbacks
 
     @bot.callback_query_handler(func=lambda call: call.data.startswith("cat_"))
     def handle_category_selection(call):
-        chat_id = call.message.chat.id
-        # Safely extract category: "cat_የወንዶች" → "የወንዶች"
-        # Use replace once to handle categories that contain underscores
+        chat_id  = call.message.chat.id
         category = call.data.replace("cat_", "", 1)
         bot.answer_callback_query(call.id)
 
@@ -183,8 +184,8 @@ def register_handlers(bot):
             return
 
         if not products:
-            bot.send_message(chat_id, f"⚠️ '<b>{category}</b>' ምድብ ውስጥ ምርት አልተገኘም።",
-                             parse_mode="HTML")
+            bot.send_message(chat_id,
+                f"⚠️ '<b>{category}</b>' ምድብ ውስጥ ምርት አልተገኘም።", parse_mode="HTML")
             return
 
         for product in products[:10]:
@@ -194,12 +195,12 @@ def register_handlers(bot):
                 logger.error(f"Error sending product card for {product.get('id')}: {e}")
 
     def _send_product_card(bot, chat_id, product):
-        variants          = product.get('product_variants') or []
-        available         = [v for v in variants if int(v.get('stock', 0)) >= 1]
-
-        base_price     = int(product.get('base_price', 0))
+        variants      = product.get('product_variants') or []
+        available     = [v for v in variants if int(v.get('stock', 0)) >= 1]
+        base_price    = int(product.get('base_price', 0))
         original_price = product.get('original_price')
-        price_line     = f"💵 {base_price} ETB"
+
+        price_line = f"💵 {base_price} ETB"
         if original_price and int(original_price) > base_price:
             price_line = f"💵 <s>{original_price}</s> <b>{base_price} ETB</b>"
 
@@ -223,24 +224,19 @@ def register_handlers(bot):
         )
         markup = keyboards.get_product_detail_keyboard(product['id'])
 
-        # Prefer Telegram file_id > URL > text-only
         sent = False
         if available:
-            lead_variant = available[0]
-
-            # 1. Try Telegram file_id (instant, free of bandwidth)
-            if lead_variant.get('telegram_file_id'):
+            lead = available[0]
+            if lead.get('telegram_file_id'):
                 try:
-                    bot.send_photo(chat_id, lead_variant['telegram_file_id'],
+                    bot.send_photo(chat_id, lead['telegram_file_id'],
                                    caption=caption, parse_mode="HTML", reply_markup=markup)
                     sent = True
                 except Exception as e:
-                    logger.warning(f"file_id send failed, falling back to URL: {e}")
-
-            # 2. Fallback to URL
-            if not sent and lead_variant.get('image_url'):
+                    logger.warning(f"file_id send failed: {e}")
+            if not sent and lead.get('image_url'):
                 try:
-                    bot.send_photo(chat_id, lead_variant['image_url'],
+                    bot.send_photo(chat_id, lead['image_url'],
                                    caption=caption, parse_mode="HTML", reply_markup=markup)
                     sent = True
                 except Exception as e:
@@ -269,21 +265,18 @@ def register_handlers(bot):
             return
 
         sizes = sorted(set(int(v['size']) for v in available))
-        bot.send_message(
-            chat_id,
+        bot.send_message(chat_id,
             f"📐 <b>{product.get('name')}</b> — Size ይምረጡ፦",
             parse_mode="HTML",
-            reply_markup=keyboards.get_size_selection_keyboard(product_id, sizes)
-        )
+            reply_markup=keyboards.get_size_selection_keyboard(product_id, sizes))
 
     @bot.callback_query_handler(func=lambda call: call.data.startswith("size_"))
     def handle_size_selection(call):
         chat_id = call.message.chat.id
-        parts   = call.data.split("_")  # ["size", product_id, size_value]
+        parts   = call.data.split("_")
         if len(parts) < 3:
             bot.answer_callback_query(call.id, "⚠️ ስህተት።")
             return
-
         product_id = parts[1]
         try:
             size = int(parts[2])
@@ -297,36 +290,31 @@ def register_handlers(bot):
             bot.send_message(chat_id, "⚠️ ምርቱ አልተገኘም።")
             return
 
-        variants  = product.get('product_variants') or []
-        matching  = [v for v in variants if int(v['size']) == size and int(v.get('stock', 0)) >= 1]
+        variants = product.get('product_variants') or []
+        matching = [v for v in variants if int(v['size']) == size and int(v.get('stock', 0)) >= 1]
         if not matching:
             bot.send_message(chat_id, f"⚠️ Size {size} አሁን የለም።")
             return
 
         colors = sorted(set(v['color'] for v in matching))
-        bot.send_message(
-            chat_id,
-            f"🎨 Size {size} — ቀለም ይምረጡ፦",
-            reply_markup=keyboards.get_color_selection_keyboard(product_id, size, colors)
-        )
+        bot.send_message(chat_id, f"🎨 Size {size} — ቀለም ይምረጡ፦",
+                         reply_markup=keyboards.get_color_selection_keyboard(product_id, size, colors))
 
     @bot.callback_query_handler(func=lambda call: call.data.startswith("color_"))
     def handle_color_selection(call):
-        chat_id    = call.message.chat.id
+        chat_id     = call.message.chat.id
         telegram_id = call.from_user.id
-        parts       = call.data.split("_")  # ["color", product_id, size, color...]
-
+        parts       = call.data.split("_")
         if len(parts) < 4:
             bot.answer_callback_query(call.id, "⚠️ ስህተት።")
             return
-
         product_id = parts[1]
         try:
             size = int(parts[2])
         except ValueError:
             bot.answer_callback_query(call.id, "⚠️ ስህተት።")
             return
-        color = "_".join(parts[3:])  # support multi-word colors
+        color = "_".join(parts[3:])
         bot.answer_callback_query(call.id)
 
         user = db.db.get_user(telegram_id)
@@ -351,13 +339,11 @@ def register_handlers(bot):
 
         result = db.db.add_to_cart(user['id'], variant['id'], quantity=1)
         if result:
-            bot.send_message(
-                chat_id,
+            bot.send_message(chat_id,
                 f"✅ <b>{product.get('name')}</b> (Size {size}, {color}) ጋሪዎ ላይ ተጨምሯል!\n\n"
                 f"💵 {int(product.get('base_price', 0))} ETB\n\n"
-                f"🛒 ጋሪ ለማየት /cart ይጫኑ ወይም ሌሎች ምርቶችን ይምረጡ።",
-                parse_mode="HTML"
-            )
+                f"🛒 ጋሪ ለማየት /cart ወይም 🛒 ጋሪዬ ን ይጫኑ።",
+                parse_mode="HTML")
         else:
             bot.send_message(chat_id, "❌ ጋሪ ላይ ማከል አልተሳካም።")
 
@@ -365,7 +351,7 @@ def register_handlers(bot):
 
     @bot.callback_query_handler(func=lambda call: call.data == "clear_cart_action")
     def handle_clear_cart(call):
-        chat_id    = call.message.chat.id
+        chat_id     = call.message.chat.id
         telegram_id = call.from_user.id
         bot.answer_callback_query(call.id)
 
@@ -373,6 +359,5 @@ def register_handlers(bot):
         if not user:
             bot.send_message(chat_id, "⚠️ ስህተት ተከስቷል።")
             return
-
         db.db.clear_cart(user['id'])
         bot.send_message(chat_id, "🗑️ ጋሪዎ ጸዳ።")

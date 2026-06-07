@@ -46,7 +46,7 @@ def get_category_menu():
         types.InlineKeyboardButton("👞 የወንዶች", callback_data="cat_የወንዶች"),
         types.InlineKeyboardButton("👠 የሴቶች", callback_data="cat_የሴቶች"),
         types.InlineKeyboardButton("👟 የህፃናት", callback_data="cat_የህፃናት"),
-        types.InlineKeyboardButton("👥 የሁለቱም", callback_data="cat_የሁለቱም")
+        types.InlineKeyboardButton("👥 የሁለቱም/Unisex", callback_data="cat_የሁለቱም/Unisex")
     )
     return markup
 
