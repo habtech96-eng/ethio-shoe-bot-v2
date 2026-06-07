@@ -12,9 +12,12 @@ import asyncio
 import logging
 import requests
 from flask import Flask, jsonify
-from telebot import TeleBot, custom_filters
+from telebot import TeleBot, custom_filters, apihelper
 from telebot.storage import StateMemoryStorage
 import telebot
+
+# Must be set BEFORE TeleBot is instantiated to enable middleware support
+apihelper.ENABLE_MIDDLEWARE = True
 
 # Import configuration (validates env vars on load)
 from config import (
