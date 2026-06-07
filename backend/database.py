@@ -1,623 +1,401 @@
 """
-Database connection and models for Ethiopian Shoe Store
-PostgreSQL backend using Supabase
-Fully synchronized with the production SQL schema.
+Database manager for Ethio Shoe Store.
+All operations strictly aligned with the production SQL schema.
 """
 import os
+import logging
 from typing import Optional, List, Dict, Any
 from datetime import datetime, timezone
 from supabase import create_client, Client
 from dotenv import load_dotenv
-import logging
 
-# Load environment variables properly
 load_dotenv()
 
-# Initialize logging
-logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# Supabase configuration - support both variable naming conventions
 SUPABASE_URL = os.getenv('SUPABASE_URL') or os.getenv('VITE_SUPABASE_URL')
 SUPABASE_KEY = os.getenv('SUPABASE_KEY') or os.getenv('VITE_SUPABASE_ANON_KEY')
 
 if not SUPABASE_URL or not SUPABASE_KEY:
-    raise ValueError("Missing Supabase configuration. Check environment variables")
+    raise ValueError("Missing Supabase credentials. Set SUPABASE_URL and SUPABASE_KEY.")
 
-# Initialize Supabase client
 supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
+
+# Schema-enforced allowlists
+ALLOWED_CATEGORIES = ['የወንዶች', 'የሴቶች', 'የህፃናት', 'የሁለቱም/Unisex']
+ALLOWED_BRANDS = ['Nike', 'Adidas', 'Puma', 'Reebok', 'Jordan', 'Local', 'Other']
+ALLOWED_CITIES = [
+    'Addis Ababa', 'Adama', 'Hawassa', 'Bahir Dar', 'Dire Dawa',
+    'Mekelle', 'Gondar', 'Jimma', 'Dessie', 'Shashamane'
+]
+ALLOWED_PAYMENT_METHODS = ['telebirr', 'cbe']
+ALLOWED_ORDER_STATUSES = ['pending', 'confirmed', 'shipped', 'delivered', 'cancelled']
 
 
 class DatabaseManager:
-    """Database manager for all shoe store operations matching the public schema"""
 
     def __init__(self):
         self.client = supabase
 
-    def _get_current_time(self) -> str:
-        """Helper to get current time in ISO format with UTC timezone"""
+    def _now(self) -> str:
         return datetime.now(timezone.utc).isoformat()
 
-    # ============================================================
-    # USER MANAGEMENT
-    # ============================================================
+    # ------------------------------------------------------------------ users
 
-    def create_user(self, telegram_id: int, first_name: str, username: str = None, phone_number: str = None) -> Dict[str, Any]:
-        """Create a new user or get existing user based on telegram_id"""
+    def create_user(self, telegram_id: int, first_name: str,
+                    username: str = None, phone_number: str = None) -> Optional[Dict]:
         try:
-            # Check if user exists
             existing = self.client.table('users').select('*').eq('telegram_id', telegram_id).execute()
-
             if existing.data:
-                # Update user info if exists
-                update_data = {'first_name': first_name, 'updated_at': self._get_current_time()}
+                update = {'first_name': first_name, 'updated_at': self._now()}
                 if username:
-                    update_data['username'] = username
+                    update['username'] = username
                 if phone_number:
-                    update_data['phone_number'] = phone_number
+                    update['phone_number'] = phone_number
+                r = self.client.table('users').update(update).eq('telegram_id', telegram_id).execute()
+                return r.data[0] if r.data else existing.data[0]
 
-                result = self.client.table('users').update(update_data).eq('telegram_id', telegram_id).execute()
-                return result.data[0] if result.data else existing.data[0]
-
-            # Create new user
-            user_data = {
-                'telegram_id': telegram_id,
+            payload = {
+                'telegram_id': int(telegram_id),
                 'first_name': first_name,
                 'username': username,
-                'phone_number': phone_number
+                'phone_number': phone_number,
             }
-            result = self.client.table('users').insert(user_data).execute()
-            logger.info(f"Created new user: {telegram_id}")
-            return result.data[0] if result.data else None
-
+            r = self.client.table('users').insert(payload).execute()
+            return r.data[0] if r.data else None
         except Exception as e:
-            logger.error(f"Error creating user: {e}")
+            logger.error(f"create_user error: {e}")
             return None
 
-    def get_user(self, telegram_id: int) -> Optional[Dict[str, Any]]:
-        """Get user by telegram ID"""
+    def get_user(self, telegram_id: int) -> Optional[Dict]:
         try:
-            result = self.client.table('users').select('*').eq('telegram_id', telegram_id).execute()
-            return result.data[0] if result.data else None
+            r = self.client.table('users').select('*').eq('telegram_id', int(telegram_id)).execute()
+            return r.data[0] if r.data else None
         except Exception as e:
-            logger.error(f"Error getting user: {e}")
+            logger.error(f"get_user error: {e}")
             return None
 
-    def get_user_by_id(self, user_id: str) -> Optional[Dict[str, Any]]:
-        """Get user by UUID"""
+    def get_user_by_id(self, user_id: str) -> Optional[Dict]:
         try:
-            result = self.client.table('users').select('*').eq('id', user_id).execute()
-            return result.data[0] if result.data else None
+            r = self.client.table('users').select('*').eq('id', user_id).execute()
+            return r.data[0] if r.data else None
         except Exception as e:
-            logger.error(f"Error getting user by ID: {e}")
+            logger.error(f"get_user_by_id error: {e}")
             return None
 
-    # ============================================================
-    # ADDRESS MANAGEMENT
-    # ============================================================
+    # --------------------------------------------------------------- addresses
 
     def add_address(self, user_id: str, city: str, subcity_or_zone: str = None,
-                    specific_location: str = None, is_default: bool = False) -> Optional[Dict[str, Any]]:
-        """Add a new address for user (With Schema City Validation CHECK)"""
+                    specific_location: str = None, is_default: bool = False) -> Optional[Dict]:
+        if city not in ALLOWED_CITIES:
+            logger.error(f"add_address: invalid city '{city}'")
+            return None
         try:
-            # Schema CHECK Constraint Validation
-            allowed_cities = ['Addis Ababa', 'Adama', 'Hawassa', 'Bahir Dar', 'Dire Dawa', 'Mekelle', 'Gondar', 'Jimma', 'Dessie', 'Shashamane']
-            if city not in allowed_cities:
-                logger.error(f"Invalid city provided: {city}. Must be one of {allowed_cities}")
-                return None
-
-            # If setting as default, unset other defaults first
             if is_default:
                 self.client.table('user_addresses').update({'is_default': False}).eq('user_id', user_id).execute()
-
-            address_data = {
+            payload = {
                 'user_id': user_id,
                 'city': city,
                 'subcity_or_zone': subcity_or_zone,
-                'specific_location_or_woreda': specific_location, 
-                'is_default': is_default
+                'specific_location_or_woreda': specific_location,
+                'is_default': is_default,
             }
-            result = self.client.table('user_addresses').insert(address_data).execute()
-            logger.info(f"Added address for user: {user_id}")
-            return result.data[0] if result.data else None
+            r = self.client.table('user_addresses').insert(payload).execute()
+            return r.data[0] if r.data else None
         except Exception as e:
-            logger.error(f"Error adding address: {e}")
+            logger.error(f"add_address error: {e}")
             return None
 
-    def get_user_addresses(self, user_id: str) -> List[Dict[str, Any]]:
-        """Get all addresses for a user"""
+    def get_user_addresses(self, user_id: str) -> List[Dict]:
         try:
-            result = self.client.table('user_addresses').select('*').eq('user_id', user_id).order('is_default', desc=True).execute()
-            return result.data if result.data else []
+            r = self.client.table('user_addresses').select('*').eq('user_id', user_id).order('is_default', desc=True).execute()
+            return r.data or []
         except Exception as e:
-            logger.error(f"Error getting addresses: {e}")
+            logger.error(f"get_user_addresses error: {e}")
             return []
 
-    # ============================================================
-    # PRODUCT MANAGEMENT
-    # ============================================================
+    # --------------------------------------------------------------- products
 
-    def add_product(self, name: str, category: str, base_price: int, description: str = None,
-                    brand: str = None, original_price: int = None) -> Optional[Dict[str, Any]]:
-        """Add a new product (With Strict Category & Brand Schema Validation)"""
+    def add_product(self, name: str, category: str, base_price: int,
+                    description: str = None, brand: str = None,
+                    original_price: int = None) -> Optional[Dict]:
+        if category not in ALLOWED_CATEGORIES:
+            logger.error(f"add_product: invalid category '{category}'")
+            return None
+        if brand and brand not in ALLOWED_BRANDS:
+            logger.error(f"add_product: invalid brand '{brand}'")
+            return None
         try:
-            # Schema Category Check
-            allowed_categories = ['የወንዶች', 'የሴቶች', 'የህፃናት', 'የሁለቱም/Unisex']
-            if category not in allowed_categories:
-                logger.error(f"Invalid category: {category}")
-                return None
-
-            # Schema Brand Check
-            if brand and brand not in ['Nike', 'Adidas', 'Puma', 'Reebok', 'Jordan', 'Local', 'Other']:
-                logger.error(f"Invalid brand: {brand}")
-                return None
-
-            product_data = {
+            payload = {
                 'name': name,
                 'category': category,
-                'base_price': base_price,
+                'base_price': int(base_price),
                 'description': description,
                 'brand': brand,
-                'original_price': original_price,
-                'is_active': True
+                'original_price': int(original_price) if original_price is not None else None,
+                'is_active': True,
             }
-            result = self.client.table('products').insert(product_data).execute()
-            logger.info(f"Added product: {name}")
-            return result.data[0] if result.data else None
+            r = self.client.table('products').insert(payload).execute()
+            return r.data[0] if r.data else None
         except Exception as e:
-            logger.error(f"Error adding product: {e}")
+            logger.error(f"add_product error: {e}")
             return None
 
-    def get_products_by_category(self, category: str) -> List[Dict[str, Any]]:
-        """Get all active products by schema category with variants included"""
+    def get_products_by_category(self, category: str) -> List[Dict]:
+        if category not in ALLOWED_CATEGORIES:
+            logger.error(f"get_products_by_category: invalid category '{category}'")
+            return []
         try:
-            result = self.client.table('products').select(
-                '*, product_variants(*)'
-            ).eq('category', category).eq('is_active', True).execute()
-            return result.data if result.data else []
+            r = self.client.table('products').select('*, product_variants(*)').eq('category', category).eq('is_active', True).execute()
+            return r.data or []
         except Exception as e:
-            logger.error(f"Error getting products by category ({category}): {e}")
+            logger.error(f"get_products_by_category error: {e}")
             return []
 
-    def get_all_products(self) -> List[Dict[str, Any]]:
-        """Get all active products with variants"""
+    def get_product(self, product_id: str) -> Optional[Dict]:
         try:
-            result = self.client.table('products').select(
-                '*, product_variants(*)'
-            ).eq('is_active', True).order('created_at', desc=True).execute()
-            return result.data if result.data else []
+            r = self.client.table('products').select('*, product_variants(*)').eq('id', product_id).execute()
+            return r.data[0] if r.data else None
         except Exception as e:
-            logger.error(f"Error getting all products: {e}")
+            logger.error(f"get_product error: {e}")
+            return None
+
+    def get_all_products(self, limit: int = 50) -> List[Dict]:
+        try:
+            r = self.client.table('products').select('*, product_variants(*)').eq('is_active', True).limit(limit).execute()
+            return r.data or []
+        except Exception as e:
+            logger.error(f"get_all_products error: {e}")
             return []
 
-    def get_product(self, product_id: str) -> Optional[Dict[str, Any]]:
-        """Get a specific product by ID with variants"""
-        try:
-            result = self.client.table('products').select(
-                '*, product_variants(*)'
-            ).eq('id', product_id).execute()
-            return result.data[0] if result.data else None
-        except Exception as e:
-            logger.error(f"Error getting product: {e}")
-            return None
-
-    def update_product(self, product_id: str, update_data: Dict[str, Any]) -> Optional[Dict[str, Any]]:
-        """Update a product"""
-        try:
-            update_data['updated_at'] = self._get_current_time()
-            result = self.client.table('products').update(update_data).eq('id', product_id).execute()
-            logger.info(f"Updated product: {product_id}")
-            return result.data[0] if result.data else None
-        except Exception as e:
-            logger.error(f"Error updating product: {e}")
-            return None
-
-    def delete_product(self, product_id: str) -> bool:
-        """Delete a product (soft delete)"""
-        try:
-            self.client.table('products').update({'is_active': False, 'updated_at': self._get_current_time()}).eq('id', product_id).execute()
-            logger.info(f"Deleted product: {product_id}")
-            return True
-        except Exception as e:
-            logger.error(f"Error deleting product: {e}")
-            return False
-
-    # ============================================================
-    # PRODUCT VARIANTS MANAGEMENT
-    # ============================================================
+    # --------------------------------------------------------- product variants
 
     def add_product_variant(self, product_id: str, size: int, color: str,
-                            stock: int = 0, image_url: str = None) -> Optional[Dict[str, Any]]:
-        """Add a product variant (size/color combination with boundaries)"""
+                            stock: int = 0, image_url: str = None,
+                            telegram_file_id: str = None) -> Optional[Dict]:
+        size = int(size)
+        stock = int(stock)
+        if not (30 <= size <= 50):
+            logger.error(f"add_product_variant: size {size} out of range 30-50")
+            return None
+        if stock < 0:
+            logger.error(f"add_product_variant: stock {stock} < 0")
+            return None
         try:
-            # Size Check Constraint from Schema (30 - 50)
-            if size < 30 or size > 50:
-                logger.error(f"Size {size} out of schema boundary (30-50)")
-                return None
-
-            variant_data = {
+            payload = {
                 'product_id': product_id,
                 'size': size,
                 'color': color,
                 'stock': stock,
-                'image_url': image_url
+                'image_url': image_url,
+                'telegram_file_id': telegram_file_id,
             }
-            result = self.client.table('product_variants').insert(variant_data).execute()
-            logger.info(f"Added variant for product: {product_id}")
-            return result.data[0] if result.data else None
+            r = self.client.table('product_variants').insert(payload).execute()
+            return r.data[0] if r.data else None
         except Exception as e:
-            logger.error(f"Error adding variant: {e}")
+            logger.error(f"add_product_variant error: {e}")
             return None
 
-    def get_product_variants(self, product_id: str) -> List[Dict[str, Any]]:
-        """Get all variants for a product"""
+    def update_variant_telegram_file_id(self, variant_id: str, telegram_file_id: str) -> bool:
         try:
-            result = self.client.table('product_variants').select('*').eq('product_id', product_id).execute()
-            return result.data if result.data else []
-        except Exception as e:
-            logger.error(f"Error getting variants: {e}")
-            return []
-
-    def get_variant(self, variant_id: str) -> Optional[Dict[str, Any]]:
-        """Get a specific variant with product details"""
-        try:
-            result = self.client.table('product_variants').select(
-                '*, products(*)'
-            ).eq('id', variant_id).execute()
-            return result.data[0] if result.data else None
-        except Exception as e:
-            logger.error(f"Error getting variant: {e}")
-            return None
-
-    def update_variant_stock(self, variant_id: str, stock: int) -> bool:
-        """Update stock for a variant ensuring constraint CHECK >= 0"""
-        try:
-            result = self.client.table('product_variants').update(
-                {'stock': max(0, stock), 'updated_at': self._get_current_time()}
-            ).eq('id', variant_id).execute()
-            logger.info(f"Updated stock for variant: {variant_id}")
+            self.client.table('product_variants').update({'telegram_file_id': telegram_file_id}).eq('id', variant_id).execute()
             return True
         except Exception as e:
-            logger.error(f"Error updating stock: {e}")
+            logger.error(f"update_variant_telegram_file_id error: {e}")
             return False
 
-    # ============================================================
-    # CART MANAGEMENT
-    # ============================================================
-
-    def add_to_cart(self, user_id: str, variant_id: str, quantity: int = 1) -> Optional[Dict[str, Any]]:
-        """Add item to cart or update existing quantity"""
+    def get_variant(self, variant_id: str) -> Optional[Dict]:
         try:
-            # Check if item already in cart
+            r = self.client.table('product_variants').select('*, products(*)').eq('id', variant_id).execute()
+            return r.data[0] if r.data else None
+        except Exception as e:
+            logger.error(f"get_variant error: {e}")
+            return None
+
+    # -------------------------------------------------------------------- cart
+
+    def get_cart_items(self, user_id: str) -> List[Dict]:
+        try:
+            r = self.client.table('cart_items').select('*, product_variants(*, products(*))').eq('user_id', user_id).execute()
+            return r.data or []
+        except Exception as e:
+            logger.error(f"get_cart_items error: {e}")
+            return []
+
+    def add_to_cart(self, user_id: str, variant_id: str, quantity: int = 1) -> Optional[Dict]:
+        if quantity <= 0:
+            return None
+        try:
             existing = self.client.table('cart_items').select('*').eq('user_id', user_id).eq('variant_id', variant_id).execute()
-
             if existing.data:
-                # Update quantity safely
-                new_quantity = existing.data[0]['quantity'] + quantity
-                result = self.client.table('cart_items').update(
-                    {'quantity': new_quantity, 'updated_at': self._get_current_time()}
-                ).eq('id', existing.data[0]['id']).execute()
-                return result.data[0] if result.data else None
-
-            # Add new item
-            cart_data = {
-                'user_id': user_id,
-                'variant_id': variant_id,
-                'quantity': quantity
-            }
-            result = self.client.table('cart_items').insert(cart_data).execute()
-            logger.info(f"Added item to cart for user: {user_id}")
-            return result.data[0] if result.data else None
+                item = existing.data[0]
+                new_qty = item['quantity'] + int(quantity)
+                r = self.client.table('cart_items').update({'quantity': new_qty}).eq('id', item['id']).execute()
+                return r.data[0] if r.data else None
+            payload = {'user_id': user_id, 'variant_id': variant_id, 'quantity': int(quantity)}
+            r = self.client.table('cart_items').insert(payload).execute()
+            return r.data[0] if r.data else None
         except Exception as e:
-            logger.error(f"Error adding to cart: {e}")
+            logger.error(f"add_to_cart error: {e}")
             return None
-
-    def get_cart_items(self, user_id: str) -> List[Dict[str, Any]]:
-        """Get all cart items for a user with deep variant and product joins"""
-        try:
-            result = self.client.table('cart_items').select(
-                '*, product_variants(*, products(*))'
-            ).eq('user_id', user_id).execute()
-            return result.data if result.data else []
-        except Exception as e:
-            logger.error(f"Error getting cart: {e}")
-            return []
-
-    def update_cart_item_quantity(self, cart_item_id: str, quantity: int) -> bool:
-        """Update quantity of cart item"""
-        try:
-            self.client.table('cart_items').update(
-                {'quantity': quantity, 'updated_at': self._get_current_time()}
-            ).eq('id', cart_item_id).execute()
-            return True
-        except Exception as e:
-            logger.error(f"Error updating cart quantity: {e}")
-            return False
-
-    def remove_from_cart(self, cart_item_id: str) -> bool:
-        """Remove item from cart"""
-        try:
-            self.client.table('cart_items').delete().eq('id', cart_item_id).execute()
-            return True
-        except Exception as e:
-            logger.error(f"Error removing from cart: {e}")
-            return False
 
     def clear_cart(self, user_id: str) -> bool:
-        """Clear all items from user's cart"""
         try:
             self.client.table('cart_items').delete().eq('user_id', user_id).execute()
-            logger.info(f"Cleared cart for user: {user_id}")
             return True
         except Exception as e:
-            logger.error(f"Error clearing cart: {e}")
+            logger.error(f"clear_cart error: {e}")
             return False
 
-    # ============================================================
-    # PROMO CODE MANAGEMENT
-    # ============================================================
+    # ------------------------------------------------------------------ orders
 
-    def validate_promo_code(self, code: str, order_amount: int) -> Optional[Dict[str, Any]]:
-        """Validate and get promo code details with strict expiration handling"""
+    def create_order(self, user_id: str, contact_phone: str,
+                     shipping_address_id: str, subtotal: int,
+                     items: List[Dict],
+                     delivery_fee: int = 50, discount_amount: int = 0,
+                     promo_code_id: str = None) -> Optional[Dict]:
+        """
+        Create an order record and all its order_items in one call.
+
+        items: list of dicts with keys:
+            product_name, size, color, quantity, price_per_unit
+        """
+        subtotal = int(subtotal)
+        delivery_fee = int(delivery_fee)
+        discount_amount = int(discount_amount)
+        total_amount = subtotal + delivery_fee - discount_amount
+
         try:
-            result = self.client.table('promo_codes').select('*').eq('code', code).eq('is_active', True).execute()
-
-            if not result.data:
-                return None
-
-            promo = result.data[0]
-
-            # Parse timestamp securely
-            if promo.get('expires_at'):
-                expires = datetime.fromisoformat(promo['expires_at'].replace('Z', '+00:00'))
-                if datetime.now(timezone.utc) > expires:
-                    return None
-
-            # Check usage limit constraint
-            if promo.get('max_uses') and promo['current_uses'] >= promo['max_uses']:
-                return None
-
-            # Check minimum order amount threshold
-            if promo.get('min_order_amount', 0) > order_amount:
-                return None
-
-            return promo
-        except Exception as e:
-            logger.error(f"Error validating promo code: {e}")
-            return None
-
-    def apply_promo_code(self, promo_id: str) -> bool:
-        """Increment promo code current_uses count"""
-        try:
-            result = self.client.table('promo_codes').select('current_uses').eq('id', promo_id).execute()
-            if result.data:
-                new_uses = result.data[0]['current_uses'] + 1
-                self.client.table('promo_codes').update({'current_uses': new_uses, 'updated_at': self._get_current_time()}).eq('id', promo_id).execute()
-                return True
-            return False
-        except Exception as e:
-            logger.error(f"Error applying promo code: {e}")
-            return None
-
-    # ============================================================
-    # ORDER MANAGEMENT
-    # ============================================================
-
-    def create_order(self, user_id: str, items: List[Dict[str, Any]], subtotal: int,
-                     delivery_fee: int, discount_amount: int, total_amount: int,
-                     shipping_address_id: str, contact_phone: str, promo_code_id: str = None) -> Optional[Dict[str, Any]]:
-        """Create a new order and reduce product variant stocks securely"""
-        try:
-            order_data = {
+            order_payload = {
                 'user_id': user_id,
+                'contact_phone': contact_phone,
+                'shipping_address_id': shipping_address_id,
                 'subtotal': subtotal,
                 'delivery_fee': delivery_fee,
                 'discount_amount': discount_amount,
                 'total_amount': total_amount,
-                'shipping_address_id': shipping_address_id,
-                'contact_phone': contact_phone,
                 'order_status': 'pending',
-                'promo_code_id': promo_code_id
+                'promo_code_id': promo_code_id,
             }
-            result = self.client.table('orders').insert(order_data).execute()
-
-            if not result.data:
+            r = self.client.table('orders').insert(order_payload).execute()
+            if not r.data:
                 return None
+            order = r.data[0]
 
-            order = result.data[0]
-
-            # Populate order_items mapped against schema schema
+            # Insert order_items
             for item in items:
-                order_item = {
+                size = int(item['size'])
+                if not (30 <= size <= 50):
+                    logger.warning(f"create_order: skipping item with invalid size {size}")
+                    continue
+                item_payload = {
                     'order_id': order['id'],
-                    'product_name': item['product_name'],
-                    'size': item['size'],
-                    'color': item['color'],
-                    'quantity': item['quantity'],
-                    'price_per_unit': item['price_per_unit']
+                    'product_name': str(item['product_name']),
+                    'size': size,
+                    'color': str(item['color']),
+                    'quantity': int(item['quantity']),
+                    'price_per_unit': int(item['price_per_unit']),
                 }
-                self.client.table('order_items').insert(order_item).execute()
+                self.client.table('order_items').insert(item_payload).execute()
 
-                # Automatically deduct stock from product_variants table
-                if 'variant_id' in item:
-                    v_res = self.client.table('product_variants').select('stock').eq('id', item['variant_id']).execute()
-                    if v_res.data:
-                        current_stock = v_res.data[0]['stock']
-                        self.update_variant_stock(item['variant_id'], current_stock - item['quantity'])
-
-            # Increment usage if promo code was successfully applied
-            if promo_code_id:
-                self.apply_promo_code(promo_code_id)
-
-            logger.info(f"Created order: {order['id']}")
             return order
         except Exception as e:
-            logger.error(f"Error creating order: {e}")
+            logger.error(f"create_order error: {e}")
             return None
 
-    def get_orders(self, user_id: str = None, status: str = None) -> List[Dict[str, Any]]:
-        """Get orders with relation joins"""
+    def get_order(self, order_id: str) -> Optional[Dict]:
         try:
-            query = self.client.table('orders').select('*, users(*), user_addresses(*)')
-
-            if user_id:
-                query = query.eq('user_id', user_id)
-            if status:
-                query = query.eq('order_status', status)
-
-            result = query.order('created_at', desc=True).execute()
-            return result.data if result.data else []
+            r = self.client.table('orders').select(
+                '*, order_items(*), users(*), user_addresses(*), payments(*)'
+            ).eq('id', order_id).execute()
+            return r.data[0] if r.data else None
         except Exception as e:
-            logger.error(f"Error getting orders: {e}")
+            logger.error(f"get_order error: {e}")
+            return None
+
+    def get_orders(self, user_id: str, status: str = None) -> List[Dict]:
+        try:
+            q = self.client.table('orders').select('*, order_items(*), payments(*)').eq('user_id', user_id)
+            if status and status in ALLOWED_ORDER_STATUSES:
+                q = q.eq('order_status', status)
+            r = q.order('created_at', desc=True).execute()
+            return r.data or []
+        except Exception as e:
+            logger.error(f"get_orders error: {e}")
             return []
 
-    def get_order(self, order_id: str) -> Optional[Dict[str, Any]]:
-        """Get order details along with individual order items"""
+    def get_all_orders(self, status: str = None, limit: int = 50) -> List[Dict]:
         try:
-            order_result = self.client.table('orders').select(
-                '*, users(*), user_addresses(*)'
-            ).eq('id', order_id).execute()
-            items_result = self.client.table('order_items').select('*').eq('order_id', order_id).execute()
-
-            if not order_result.data:
-                return None
-
-            order = order_result.data[0]
-            order['items'] = items_result.data if items_result.data else []
-            return order
+            q = self.client.table('orders').select('*, order_items(*), users(*), payments(*)')
+            if status and status in ALLOWED_ORDER_STATUSES:
+                q = q.eq('order_status', status)
+            r = q.order('created_at', desc=True).limit(limit).execute()
+            return r.data or []
         except Exception as e:
-            logger.error(f"Error getting order: {e}")
-            return None
+            logger.error(f"get_all_orders error: {e}")
+            return []
 
-    def update_order_status(self, order_id: str, status: str) -> bool:
-        """Update order status keeping check constraint restrictions"""
+    def update_order_status(self, order_id: str, new_status: str) -> bool:
+        if new_status not in ALLOWED_ORDER_STATUSES:
+            logger.error(f"update_order_status: invalid status '{new_status}'")
+            return False
         try:
-            valid_statuses = ['pending', 'confirmed', 'shipped', 'delivered', 'cancelled']
-            if status not in valid_statuses:
-                logger.error(f"Invalid status: {status}")
-                return False
-
-            self.client.table('orders').update(
-                {'order_status': status, 'updated_at': self._get_current_time()}
-            ).eq('id', order_id).execute()
-            logger.info(f"Updated order {order_id} status to {status}")
+            self.client.table('orders').update({'order_status': new_status, 'updated_at': self._now()}).eq('id', order_id).execute()
             return True
         except Exception as e:
-            logger.error(f"Error updating order status: {e}")
+            logger.error(f"update_order_status error: {e}")
             return False
 
-    # ============================================================
-    # PAYMENT MANAGEMENT
-    # ============================================================
+    # ---------------------------------------------------------------- payments
 
-    def create_payment(self, order_id: str, payment_method: str, transaction_reference: str) -> Optional[Dict[str, Any]]:
-        """Create a payment record verified against schema checks"""
+    def create_payment(self, order_id: str, payment_method: str,
+                       transaction_reference: str) -> Optional[Dict]:
+        if payment_method not in ALLOWED_PAYMENT_METHODS:
+            logger.error(f"create_payment: invalid method '{payment_method}'")
+            return None
         try:
-            # CHECK constraint: telebirr or cbe
-            if payment_method not in ['telebirr', 'cbe']:
-                logger.error(f"Invalid payment method: {payment_method}")
-                return None
-
-            payment_data = {
+            payload = {
                 'order_id': order_id,
                 'payment_method': payment_method,
                 'transaction_reference': transaction_reference,
-                'is_verified': False
+                'is_verified': False,
             }
-            result = self.client.table('payments').insert(payment_data).execute()
-            logger.info(f"Created payment for order: {order_id}")
-            return result.data[0] if result.data else None
+            r = self.client.table('payments').insert(payload).execute()
+            return r.data[0] if r.data else None
         except Exception as e:
-            logger.error(f"Error creating payment: {e}")
+            logger.error(f"create_payment error: {e}")
             return None
 
-    def verify_payment(self, payment_id: str, admin_telegram_id: int) -> bool:
-        """Verify a payment and auto-confirm order status"""
+    def get_payment(self, payment_id: str) -> Optional[Dict]:
         try:
-            update_data = {
+            r = self.client.table('payments').select('*').eq('id', payment_id).execute()
+            return r.data[0] if r.data else None
+        except Exception as e:
+            logger.error(f"get_payment error: {e}")
+            return None
+
+    def verify_payment(self, payment_id: str, admin_telegram_id: int) -> Optional[Dict]:
+        try:
+            update = {
                 'is_verified': True,
-                'verified_by_admin_id': admin_telegram_id,
-                'verified_at': self._get_current_time(),
-                'updated_at': self._get_current_time()
+                'verified_by_admin_id': int(admin_telegram_id),
+                'verified_at': self._now(),
+                'updated_at': self._now(),
             }
-            result = self.client.table('payments').update(update_data).eq('id', payment_id).execute()
-            
-            # Auto-confirm the order status once payment is verified
-            if result.data:
-                order_id = result.data[0]['order_id']
-                self.update_order_status(order_id, 'confirmed')
+            r = self.client.table('payments').update(update).eq('id', payment_id).execute()
+            return r.data[0] if r.data else None
+        except Exception as e:
+            logger.error(f"verify_payment error: {e}")
+            return None
 
-            logger.info(f"Payment {payment_id} verified by admin {admin_telegram_id}")
+    def update_payment_status(self, payment_id: str, is_verified: bool) -> bool:
+        try:
+            self.client.table('payments').update({'is_verified': is_verified, 'updated_at': self._now()}).eq('id', payment_id).execute()
             return True
         except Exception as e:
-            logger.error(f"Error verifying payment: {e}")
+            logger.error(f"update_payment_status error: {e}")
             return False
 
-    def get_payment_by_order(self, order_id: str) -> Optional[Dict[str, Any]]:
-        """Get payment for an order"""
-        try:
-            result = self.client.table('payments').select('*').eq('order_id', order_id).execute()
-            return result.data[0] if result.data else None
-        except Exception as e:
-            logger.error(f"Error getting payment: {e}")
-            return None
 
-    def get_payment(self, payment_id: str) -> Optional[Dict[str, Any]]:
-        """Get a specific payment record by its ID"""
-        try:
-            result = self.client.table('payments').select('*').eq('id', payment_id).execute()
-            return result.data[0] if result.data else None
-        except Exception as e:
-            logger.error(f"Error getting payment by ID: {e}")
-            return None
-
-    def update_payment_status(self, payment_id: str, status: str) -> bool:
-        """Update payment status or verification state"""
-        try:
-            self.client.table('payments').update({
-                'is_verified': False, 
-                'updated_at': self._get_current_time()
-            }).eq('id', payment_id).execute()
-            return True
-        except Exception as e:
-            logger.error(f"Error updating payment status: {e}")
-            return False
-
-    # ============================================================
-    # REVIEW MANAGEMENT
-    # ============================================================
-
-    def add_review(self, user_id: str, product_id: str, rating: int, comment: str = None) -> Optional[Dict[str, Any]]:
-        """Add a product review validating rating boundaries"""
-        try:
-            if rating < 1 or rating > 5:
-                logger.error(f"Rating {rating} must be between 1 and 5")
-                return None
-
-            review_data = {
-                'user_id': user_id,
-                'product_id': product_id,
-                'rating': rating,
-                'comment': comment
-            }
-            result = self.client.table('product_reviews').upsert(review_data).execute()
-            logger.info(f"Added review for product: {product_id}")
-            return result.data[0] if result.data else None
-        except Exception as e:
-            logger.error(f"Error adding review: {e}")
-            return None
-
-    def get_product_reviews(self, product_id: str) -> List[Dict[str, Any]]:
-        """Get all reviews for a product with author metadata"""
-        try:
-            result = self.client.table('product_reviews').select(
-                '*, users(*)'
-            ).eq('product_id', product_id).order('created_at', desc=True).execute()
-            return result.data if result.data else []
-        except Exception as e:
-            logger.error(f"Error getting reviews: {e}")
-            return []
-
-
-# Initialize global database manager instance
+# Module-level singleton used by all handlers
 db = DatabaseManager()
