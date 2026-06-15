@@ -7,7 +7,6 @@ import {
   CheckCircle,
   XCircle,
   AlertCircle,
-  TrendingUp,
   CreditCard,
   ArrowLeft,
   RefreshCw,
@@ -16,63 +15,180 @@ import {
   AlertTriangle,
   DollarSign,
   Plus,
-  Upload,
   X,
   Save,
-  Camera
+  Camera,
+  TrendingUp
 } from 'lucide-react';
 
 const ADMIN_ACCESS_CODE = 'ETHIO_ADMIN_2026';
 
-// Strict status colors as specified
+// ============================================================
+// STATUS CONFIG - Matches backend definitions exactly
+// ============================================================
 const STATUS_CONFIG = {
   pending: {
     label: 'Pending',
     labelAm: 'በመጠባበቅ ላይ',
+    // Yellow - #d69e2e
     color: 'bg-yellow-100 text-yellow-800 border-yellow-500',
-    hex: '#d69e2e',
     icon: AlertCircle
   },
   confirmed: {
     label: 'Confirmed',
     labelAm: 'ተረጋግጧል',
+    // Teal/Cyan - #25855a
     color: 'bg-teal-100 text-teal-800 border-teal-600',
-    hex: '#25855a',
     icon: CheckCircle
   },
   shipped: {
     label: 'Shipped',
     labelAm: 'ተልኳል',
+    // Blue - #3182ce
     color: 'bg-blue-100 text-blue-800 border-blue-500',
-    hex: '#3182ce',
     icon: Truck
   },
   delivered: {
     label: 'Delivered',
     labelAm: 'ተጠናቋል',
-    color: 'bg-green-100 text-green-600 border-green-500',
-    hex: '#22c55e',
+    // Green - #22c55e
+    color: 'bg-green-100 text-green-800 border-green-500',
     icon: Package
   },
   cancelled: {
     label: 'Cancelled',
     labelAm: 'ተሰርዟል',
+    // Red - #c53030
     color: 'bg-red-100 text-red-800 border-red-600',
-    hex: '#c53030',
     icon: XCircle
   }
 };
 
-// Category labels mapping
+// ============================================================
+// CATEGORY LABELS - Maps UI display to DB constraint values
+// ============================================================
 const CATEGORY_LABELS = {
   'የወንዶች': 'የወንዶች (Men)',
   'የሴቶች': 'የሴቶች (Women)',
   'የህፃናት': 'የህፃናት (Kids)',
-  'የሁለቱም/Unisex': 'ለሁሉም (Unisex)'
+  'የሁለቱም/Unisex': 'ለሁሉም (Unisex)'  // Display friendly, maps to DB value
 };
 
 const BRANDS = ['Nike', 'Adidas', 'Puma', 'Reebok', 'Jordan', 'Local', 'Other'];
 const SIZES = Array.from({length: 21}, (_, i) => 30 + i); // 30-50
+
+// ============================================================
+// INPUT VALIDATION FUNCTIONS
+// ============================================================
+
+// Dangerous patterns to reject
+const DANGEROUS_PATTERNS = [
+  /ssh\s+/i, /scp\s+/i, /sudo\s+/i, /root@/i, /rm\s+-/i,
+  /wget\s+/i, /curl\s+/i, /nc\s+-/i, /bash\s+-/i, /\/bin\//i,
+  /chmod\s+/i, /chown\s+/i, /\|\s*sh/i, /&&/i, /;/
+];
+
+const DANGEROUS_CHARS = ['<', '>', '{', '}', '`', '$', '|', '&'];
+
+function validateInput(text, maxLength = 100) {
+  if (!text || typeof text !== 'string') {
+    return { valid: false, error: 'እባክዎ ዋጋ ያስገቡ።' };
+  }
+
+  const trimmed = text.trim();
+
+  if (trimmed.length === 0) {
+    return { valid: false, error: 'እባክዘ ዋጋ ያስገቡ።' };
+  }
+
+  if (trimmed.length > maxLength) {
+    return { valid: false, error: `ጽሑፍ በጣም ረጅም ነው (ከ${maxLength} ፊደላት በታች)።` };
+  }
+
+  // Check for dangerous characters
+  for (const char of DANGEROUS_CHARS) {
+    if (trimmed.includes(char)) {
+      return { valid: false, error: `የማይፈቀድ ባህሪ: '${char}'` };
+    }
+  }
+
+  // Check for dangerous patterns
+  for (const pattern of DANGEROUS_PATTERNS) {
+    if (pattern.test(trimmed)) {
+      return { valid: false, error: 'የማይፈቀድ ጽሑፍ ተገኝቷል።' };
+    }
+  }
+
+  return { valid: true, value: trimmed };
+}
+
+function validateNumber(value, min = 0, max = Infinity) {
+  const num = parseInt(value, 10);
+  if (isNaN(num)) {
+    return { valid: false, error: 'ቁጥር ብቻ ያስገቡ።' };
+  }
+  if (num < min) {
+    return { valid: false, error: `ቁጥር ከ ${min} በላይ መሆን አለበት።` };
+  }
+  if (num > max) {
+    return { valid: false, error: `ቁጥር ከ ${max} በታች መሆን አለበት።` };
+  }
+  return { valid: true, value: num };
+}
+
+function formatPhoneNumber(phone) {
+  if (!phone) return 'N/A';
+
+  const cleaned = String(phone).replace(/[^0-9+]/g, '');
+
+  // Check for invalid legacy strings
+  if (!cleaned || cleaned.length < 7) {
+    return 'N/A';
+  }
+
+  // Ethiopian phone formatting
+  // +251 format: +251 9X XXX XXXX
+  if (cleaned.startsWith('+251')) {
+    const match = cleaned.match(/^\+251(\d{2})(\d{3})(\d{4})$/);
+    if (match) {
+      return `+251 ${match[1]} ${match[2]} ${match[3]}`;
+    }
+    return cleaned;
+  }
+
+  // 09 format: 09 XX XXX XXXX
+  if (cleaned.startsWith('09') && cleaned.length === 10) {
+    const match = cleaned.match(/^09(\d{2})(\d{3})(\d{3})$/);
+    if (match) {
+      return `09 ${match[1]} ${match[2]} ${match[3]}`;
+    }
+  }
+
+  return cleaned;
+}
+
+// ============================================================
+// TOAST NOTIFICATION COMPONENT
+// ============================================================
+
+function Toast({ message, type = 'error', onClose }) {
+  const bgColor = type === 'error' ? 'bg-red-600' :
+                  type === 'success' ? 'bg-green-600' : 'bg-blue-600';
+
+  return (
+    <div className={`fixed bottom-4 right-4 ${bgColor} text-white px-6 py-3 rounded-lg shadow-lg flex items-center gap-3 z-50 animate-pulse`}>
+      <AlertCircle className="w-5 h-5" />
+      <span>{message}</span>
+      <button onClick={onClose} className="ml-2 hover:opacity-80">
+        <X className="w-4 h-4" />
+      </button>
+    </div>
+  );
+}
+
+// ============================================================
+// ADMIN DASHBOARD COMPONENT
+// ============================================================
 
 function AdminDashboard({ onLogout }) {
   const [orders, setOrders] = useState([]);
@@ -94,6 +210,7 @@ function AdminDashboard({ onLogout }) {
   const [activeTab, setActiveTab] = useState('orders');
   const [showAddProduct, setShowAddProduct] = useState(false);
   const [uploadingImage, setUploadingImage] = useState(false);
+  const [toast, setToast] = useState(null);
 
   // New product form state
   const [newProduct, setNewProduct] = useState({
@@ -106,11 +223,19 @@ function AdminDashboard({ onLogout }) {
     variants: [{ size: 38, color: '', stock: 1, image_url: '' }]
   });
 
+  const [formErrors, setFormErrors] = useState({});
+
+  const showToast = (message, type = 'error') => {
+    setToast({ message, type });
+    setTimeout(() => setToast(null), 5000);
+  };
+
   const loadData = useCallback(async () => {
     try {
       setLoading(true);
       setError(null);
 
+      // Fetch orders with user info and items
       const { data: ordersData, error: ordersError } = await supabase
         .from('orders')
         .select('*, users(first_name, telegram_id), order_items(*), payments(*)')
@@ -118,6 +243,7 @@ function AdminDashboard({ onLogout }) {
 
       if (ordersError) throw ordersError;
 
+      // Fetch products with variants for stock monitoring
       const { data: productsData, error: productsError } = await supabase
         .from('products')
         .select('id, name, base_price, is_active, category, brand, product_variants(id, stock, size, color, image_url)')
@@ -125,6 +251,7 @@ function AdminDashboard({ onLogout }) {
 
       if (productsError) throw productsError;
 
+      // Fetch all payments
       const { data: paymentsData, error: paymentsError } = await supabase
         .from('payments')
         .select('*, orders(total_amount)')
@@ -136,6 +263,7 @@ function AdminDashboard({ onLogout }) {
       setProducts(productsData || []);
       setPayments(paymentsData || []);
 
+      // Calculate stats
       const totalRevenue = (ordersData || [])
         .filter(o => o.order_status === 'delivered')
         .reduce((sum, o) => sum + (o.total_amount || 0), 0);
@@ -189,10 +317,12 @@ function AdminDashboard({ onLogout }) {
         .eq('id', orderId);
 
       if (error) throw error;
+
       setOrders(prev => prev.map(o => o.id === orderId ? { ...o, order_status: newStatus } : o));
+      showToast('ትዕዛዝ ተቀይሯል!', 'success');
     } catch (err) {
       console.error('Error updating order status:', err);
-      alert('ትዕዛዝ ማሻሻል አልተሳካም።');
+      showToast('ትዕዛዝ ማሻሻል አልተሳካም።');
     }
   };
 
@@ -218,9 +348,10 @@ function AdminDashboard({ onLogout }) {
       }
 
       loadData();
+      showToast(verify ? 'ክፍያ ተረጋግጧል!' : 'ክፍያ ተከልክሏል', verify ? 'success' : 'error');
     } catch (err) {
       console.error('Error updating payment:', err);
-      alert('ክፍያ ማሻሻል አልተሳካም።');
+      showToast('ክፍያ ማሻሻል አልተሳካም።');
     }
   };
 
@@ -244,7 +375,7 @@ function AdminDashboard({ onLogout }) {
       return publicUrl;
     } catch (err) {
       console.error('Image upload error:', err);
-      alert('ምስል መስቀል አልተሳካም።');
+      showToast('ምስል መስቀል አልተሳካም።');
       return null;
     } finally {
       setUploadingImage(false);
@@ -254,6 +385,16 @@ function AdminDashboard({ onLogout }) {
   const handleImageUpload = async (e, variantIndex) => {
     const file = e.target.files[0];
     if (!file) return;
+
+    if (!file.type.startsWith('image/')) {
+      showToast('እባክዘ ምስል ፋይል ብቻ ያስገቡ።');
+      return;
+    }
+
+    if (file.size > 5 * 1024 * 1024) {
+      showToast('ፋይል ከ5MB በታች መሆን አለበት።');
+      return;
+    }
 
     const url = await uploadImage(file);
     if (url) {
@@ -278,14 +419,76 @@ function AdminDashboard({ onLogout }) {
 
   const updateVariant = (index, field, value) => {
     const newVariants = [...newProduct.variants];
-    newVariants[index][field] = value;
+
+    // Validate numeric fields
+    if (field === 'stock' || field === 'size') {
+      const validation = validateNumber(value, field === 'stock' ? 0 : 30, field === 'size' ? 50 : Infinity);
+      if (!validation.valid && value !== '') {
+        showToast(validation.error);
+        return;
+      }
+      newVariants[index][field] = validation.valid ? validation.value : value;
+    } else {
+      newVariants[index][field] = value;
+    }
+
     setNewProduct({ ...newProduct, variants: newVariants });
+  };
+
+  const validateProductForm = () => {
+    const errors = {};
+
+    // Validate name
+    const nameValidation = validateInput(newProduct.name, 100);
+    if (!nameValidation.valid) {
+      errors.name = nameValidation.error;
+    }
+
+    // Validate category
+    if (!newProduct.category) {
+      errors.category = 'እባክዘ ምድብ ይምረጡ።';
+    }
+
+    // Validate base_price
+    const priceValidation = validateNumber(newProduct.base_price, 1, 10000000);
+    if (!priceValidation.valid) {
+      errors.base_price = priceValidation.error;
+    }
+
+    // Validate original_price if provided
+    if (newProduct.original_price) {
+      const origPriceValidation = validateNumber(newProduct.original_price, 0, 10000000);
+      if (!origPriceValidation.valid) {
+        errors.original_price = origPriceValidation.error;
+      } else if (origPriceValidation.value <= priceValidation.value) {
+        errors.original_price = 'የቀድሞ ዋጋ ከአሁኑ ዋጋ በላይ መሆን አለበት።';
+      }
+    }
+
+    // Validate variants
+    for (let i = 0; i < newProduct.variants.length; i++) {
+      const variant = newProduct.variants[i];
+
+      const colorValidation = validateInput(variant.color, 30);
+      if (!variant.color || !colorValidation.valid) {
+        errors[`variant_color_${i}`] = 'ትክክለኛ ቀለም ያስገቡ።';
+      }
+
+      const stockValidation = validateNumber(variant.stock, 0, 10000);
+      if (!stockValidation.valid) {
+        errors[`variant_stock_${i}`] = stockValidation.error;
+      }
+    }
+
+    setFormErrors(errors);
+    return Object.keys(errors).length === 0;
   };
 
   const handleCreateProduct = async () => {
     try {
-      if (!newProduct.name || !newProduct.category || !newProduct.base_price) {
-        alert('እባክዎ ሁሉም አስፈላጊ መረጃዎችን ይሙሉ።');
+      // Validate form first
+      if (!validateProductForm()) {
+        showToast('እባክዘ ሁሉም አስፈላጊ መረጃዎችን በትክክል ይሙሉ።');
         return;
       }
 
@@ -293,34 +496,40 @@ function AdminDashboard({ onLogout }) {
       const { data: productData, error: productError } = await supabase
         .from('products')
         .insert({
-          name: newProduct.name,
-          category: newProduct.category,
+          name: validateInput(newProduct.name, 100).value,
+          category: newProduct.category, // Direct DB value
           brand: newProduct.brand || null,
-          base_price: parseInt(newProduct.base_price),
-          original_price: newProduct.original_price ? parseInt(newProduct.original_price) : null,
+          base_price: parseInt(newProduct.base_price, 10),
+          original_price: newProduct.original_price ? parseInt(newProduct.original_price, 10) : null,
           description: newProduct.description || null,
           is_active: true
         })
         .select()
         .single();
 
-      if (productError) throw productError;
+      if (productError) {
+        console.error('Product insert error:', productError);
+        throw productError;
+      }
 
       // Create variants
       for (const variant of newProduct.variants) {
-        if (!variant.color || !variant.stock) continue;
+        const colorValidation = validateInput(variant.color, 30);
+        if (!variant.color || !colorValidation.valid) continue;
 
         const { error: variantError } = await supabase
           .from('product_variants')
           .insert({
             product_id: productData.id,
-            size: parseInt(variant.size),
-            color: variant.color,
-            stock: parseInt(variant.stock),
+            size: parseInt(variant.size, 10),
+            color: colorValidation.value,
+            stock: Math.max(0, parseInt(variant.stock, 10) || 0),
             image_url: variant.image_url || null
           });
 
-        if (variantError) console.error('Variant error:', variantError);
+        if (variantError) {
+          console.error('Variant error:', variantError);
+        }
       }
 
       // Reset form
@@ -333,21 +542,30 @@ function AdminDashboard({ onLogout }) {
         description: '',
         variants: [{ size: 38, color: '', stock: 1, image_url: '' }]
       });
+      setFormErrors({});
       setShowAddProduct(false);
       loadData();
-      alert('ምርት በተሳካ ሁኔታ ተፈጥሯል!');
+      showToast('ምርት በተሳካ ሁኔታ ተፈጥሯል!', 'success');
     } catch (err) {
       console.error('Error creating product:', err);
-      alert('ምርት መፍጠር አልተሳካም።');
+      showToast('ምርት መፍጠር አልተሳካም። ' + (err.message || ''));
     }
   };
 
   const formatCurrency = (amount) => `${(amount || 0).toLocaleString()} ETB`;
+
   const formatDate = (dateString) => {
     if (!dateString) return 'N/A';
     return new Date(dateString).toLocaleDateString('en-US', {
       year: 'numeric', month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit'
     });
+  };
+
+  // Calculate line total for order items
+  const calculateLineTotal = (item) => {
+    const price = parseInt(item.price_per_unit, 10) || 0;
+    const qty = parseInt(item.quantity, 10) || 1;
+    return price * qty;
   };
 
   const filteredOrders = statusFilter === 'all' ? orders : orders.filter(o => o.order_status === statusFilter);
@@ -391,6 +609,8 @@ function AdminDashboard({ onLogout }) {
         </div>
       </div>
 
+      {toast && <Toast message={toast.message} type={toast.type} onClose={() => setToast(null)} />}
+
       <div className="max-w-7xl mx-auto px-4 mt-6">
         {error && (
           <div className="mb-6 p-4 bg-red-50 border border-red-200 rounded-lg flex items-center gap-3">
@@ -427,7 +647,7 @@ function AdminDashboard({ onLogout }) {
           </div>
           <div className="bg-white rounded-xl p-4 shadow-sm border border-gray-200">
             <div className="flex items-center gap-2">
-              <div className="p-2 rounded-lg bg-yellow-100"><AlertCircle className="w-5 h-5 text-yellow-600" /></div>
+              <div className="p-2 rounded-lg bg-yellow-100"><AlertCircle className="w-5 h-5 text-yellow-800" /></div>
               <div><p className="text-xs text-gray-500">በመጠባበቅ</p><p className="text-xl font-bold">{stats.pendingOrders}</p></div>
             </div>
           </div>
@@ -493,7 +713,7 @@ function AdminDashboard({ onLogout }) {
                       <tr key={order.id} className="hover:bg-gray-50">
                         <td className="px-6 py-4 font-mono text-sm">#{order.id.slice(0, 8)}</td>
                         <td className="px-6 py-4">{order.customer_name || order.users?.first_name || 'N/A'}</td>
-                        <td className="px-6 py-4 text-sm">{order.contact_phone || 'N/A'}</td>
+                        <td className="px-6 py-4 text-sm">{formatPhoneNumber(order.contact_phone)}</td>
                         <td className="px-6 py-4 font-semibold">{formatCurrency(order.total_amount)}</td>
                         <td className="px-6 py-4">
                           <span className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium border ${status.color}`}>
@@ -554,7 +774,7 @@ function AdminDashboard({ onLogout }) {
                       <td className="px-4 py-3 font-semibold">{formatCurrency(payment.orders?.total_amount || 0)}</td>
                       <td className="px-4 py-3">
                         <span className={`inline-flex items-center px-2 py-1 rounded-full text-xs font-medium ${
-                          payment.is_verified ? 'bg-green-100 text-green-700' : 'bg-yellow-100 text-yellow-700'
+                          payment.is_verified ? 'bg-green-100 text-green-800' : 'bg-yellow-100 text-yellow-800'
                         }`}>{payment.is_verified ? 'የተረጋገጠ' : 'ያልተረጋገጠ'}</span>
                       </td>
                       <td className="px-4 py-3 text-sm text-gray-500">{formatDate(payment.created_at)}</td>
@@ -594,17 +814,21 @@ function AdminDashboard({ onLogout }) {
                   <div>
                     <label className="block text-sm font-medium mb-1">ስም *</label>
                     <input type="text" value={newProduct.name} onChange={(e) => setNewProduct({...newProduct, name: e.target.value})}
-                      className="w-full px-3 py-2 border rounded-lg" placeholder="ምርት ስም" />
+                      className={`w-full px-3 py-2 border rounded-lg ${formErrors.name ? 'border-red-500' : ''}`}
+                      placeholder="ምርት ስም" />
+                    {formErrors.name && <p className="text-red-500 text-xs mt-1">{formErrors.name}</p>}
                   </div>
                   <div>
                     <label className="block text-sm font-medium mb-1">ምድብ *</label>
                     <select value={newProduct.category} onChange={(e) => setNewProduct({...newProduct, category: e.target.value})}
-                      className="w-full px-3 py-2 border rounded-lg">
+                      className={`w-full px-3 py-2 border rounded-lg ${formErrors.category ? 'border-red-500' : ''}`}>
                       <option value="">ምድብ ምረጥ</option>
-                      {Object.entries(CATEGORY_LABELS).map(([key, label]) => (
-                        <option key={key} value={key}>{label}</option>
+                      {/* Display labels map to actual DB values */}
+                      {Object.entries(CATEGORY_LABELS).map(([dbValue, label]) => (
+                        <option key={dbValue} value={dbValue}>{label}</option>
                       ))}
                     </select>
+                    {formErrors.category && <p className="text-red-500 text-xs mt-1">{formErrors.category}</p>}
                   </div>
                   <div>
                     <label className="block text-sm font-medium mb-1">ብራንድ</label>
@@ -617,12 +841,16 @@ function AdminDashboard({ onLogout }) {
                   <div>
                     <label className="block text-sm font-medium mb-1">ዋጋ (ETB) *</label>
                     <input type="number" value={newProduct.base_price} onChange={(e) => setNewProduct({...newProduct, base_price: e.target.value})}
-                      className="w-full px-3 py-2 border rounded-lg" placeholder="0" />
+                      className={`w-full px-3 py-2 border rounded-lg ${formErrors.base_price ? 'border-red-500' : ''}`}
+                      placeholder="0" min="1" />
+                    {formErrors.base_price && <p className="text-red-500 text-xs mt-1">{formErrors.base_price}</p>}
                   </div>
                   <div>
                     <label className="block text-sm font-medium mb-1">መጀመሪያ ዋጋ (ETB)</label>
                     <input type="number" value={newProduct.original_price} onChange={(e) => setNewProduct({...newProduct, original_price: e.target.value})}
-                      className="w-full px-3 py-2 border rounded-lg" placeholder="0" />
+                      className={`w-full px-3 py-2 border rounded-lg ${formErrors.original_price ? 'border-red-500' : ''}`}
+                      placeholder="0" min="0" />
+                    {formErrors.original_price && <p className="text-red-500 text-xs mt-1">{formErrors.original_price}</p>}
                   </div>
                   <div className="md:col-span-2">
                     <label className="block text-sm font-medium mb-1">መግለጫ</label>
@@ -644,12 +872,14 @@ function AdminDashboard({ onLogout }) {
                     <div>
                       <label className="block text-xs font-medium mb-1">ቀለም</label>
                       <input type="text" value={variant.color} onChange={(e) => updateVariant(index, 'color', e.target.value)}
-                        className="w-full px-2 py-1.5 border rounded text-sm" placeholder="ጥቁር" />
+                        className={`w-full px-2 py-1.5 border rounded text-sm ${formErrors[`variant_color_${index}`] ? 'border-red-500' : ''}`}
+                        placeholder="ጥቁር" />
                     </div>
                     <div>
                       <label className="block text-xs font-medium mb-1">ክምችት</label>
                       <input type="number" value={variant.stock} onChange={(e) => updateVariant(index, 'stock', e.target.value)}
-                        className="w-full px-2 py-1.5 border rounded text-sm" min="0" />
+                        className={`w-full px-2 py-1.5 border rounded text-sm ${formErrors[`variant_stock_${index}`] ? 'border-red-500' : ''}`}
+                        min="0" />
                     </div>
                     <div>
                       <label className="block text-xs font-medium mb-1">ምስል</label>
@@ -665,7 +895,7 @@ function AdminDashboard({ onLogout }) {
                     </div>
                     <div className="flex items-end">
                       <button onClick={() => removeVariant(index)} disabled={newProduct.variants.length === 1}
-                        className="p-1.5 text-red-600 hover:bg-red-50 rounded disabled:opacity-30">
+                        className={`p-1.5 text-red-600 rounded ${newProduct.variants.length > 1 ? 'hover:bg-red-50' : 'opacity-30'}`}>
                         <X className="w-5 h-5" />
                       </button>
                     </div>
@@ -680,8 +910,10 @@ function AdminDashboard({ onLogout }) {
                     className="flex items-center gap-2 px-4 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700">
                     <Save className="w-5 h-5" /> አስቀምጥ
                   </button>
-                  <button onClick={() => setShowAddProduct(false)}
-                    className="px-4 py-2 border rounded-lg hover:bg-gray-50">ሰርዝ</button>
+                  <button onClick={() => {
+                    setShowAddProduct(false);
+                    setFormErrors({});
+                  }} className="px-4 py-2 border rounded-lg hover:bg-gray-50">ሰርዝ</button>
                 </div>
               </div>
             )}
@@ -729,7 +961,10 @@ function AdminDashboard({ onLogout }) {
   );
 }
 
-// Admin Login Gate
+// ============================================================
+// ADMIN LOGIN GATE
+// ============================================================
+
 function AdminGate({ children }) {
   const [isAuthenticated, setIsAuthenticated] = useState(false);
   const [accessCode, setAccessCode] = useState('');

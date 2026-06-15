@@ -103,7 +103,7 @@ const TRANSLATIONS = {
     men: 'የወንዶች',
     women: 'የሴቶች',
     kids: 'የህፃናት',
-    unisex: 'ሁለቱም',
+    unisex: 'ለሁሉም',
     addToCart: 'ወደ ጋሪያ አክል',
     viewCart: 'ጋሪያ ይመልከቱ',
     checkout: 'ለመክፈል',
@@ -153,7 +153,8 @@ const CATEGORIES = [
   { id: 'የወንዶች', labelEn: 'Men', labelAm: 'የወንዶች', emoji: '👞' },
   { id: 'የሴቶች', labelEn: 'Women', labelAm: 'የሴቶች', emoji: '👠' },
   { id: 'የህፃናት', labelEn: 'Kids', labelAm: 'የህፃናት', emoji: '👟' },
-  { id: 'የሁለቱም/Unisex', labelEn: 'Unisex', labelAm: 'የሁለቱም', emoji: '👥' }
+  // Maps to 'የሁለቱም/Unisex' in DB - displays as "ለሁሉም" (For All)
+  { id: 'የሁለቱም/Unisex', labelEn: 'Unisex', labelAm: 'ለሁሉም', emoji: '👥' }
 ];
 
 // ============================================================
