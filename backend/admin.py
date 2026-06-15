@@ -6,6 +6,7 @@ State management uses (chat_id) as the key — valid for private chats (user_id 
 """
 import sys
 import os
+import re
 import logging
 from telebot.handler_backends import State, StatesGroup
 from telebot.types import InlineKeyboardMarkup, InlineKeyboardButton
@@ -22,6 +23,112 @@ logger = logging.getLogger(__name__)
 
 # Prevent duplicate DB submissions when an admin submits rapidly
 processing_admins = set()
+
+
+# ----------------------------------------------------------------------
+# INPUT SANITIZATION - Prevent injection attacks
+# ----------------------------------------------------------------------
+
+# Dangerous patterns to reject
+DANGEROUS_PATTERNS = [
+    r'ssh\s+',              # SSH commands
+    r'scp\s+',              # SCP commands
+    r'sudo\s+',             # Sudo commands
+    r'root@',               # Root user references
+    r'rm\s+-',              # rm commands
+    r'wget\s+',             # wget downloads
+    r'curl\s+',             # curl requests
+    r'nc\s+-',              # netcat
+    r'bash\s+-',           # bash execution
+    r'/bin/',               # binary paths
+    r'chmod\s+',            # chmod
+    r'chown\s+',            # chown
+    r'\|\s*sh',             # pipe to shell
+    r'&&\s*\w',             # command chaining
+    r';\s*\w',              # semicolon command separation
+    r'SELECT\s+',           # SQL injection (case insensitive)
+    r'INSERT\s+',
+    r'UPDATE\s+',
+    r'DELETE\s+',
+    r'DROP\s+',
+    r'UNION\s+',
+    r'--\s*$',              # SQL comments
+]
+
+DANGEROUS_CHARS = ['<', '>', '{', '}', '`', '$', ';', '|', '&']
+
+
+def sanitize_input(text, max_length=100, allow_amharic=True):
+    """
+    Validate and sanitize user input to prevent injection attacks.
+
+    Returns: (sanitized_text, is_valid, error_message)
+    """
+    if not text:
+        return None, False, "እባክዎ ዋጋ ያስገቡ።"
+
+    text = text.strip()
+
+    if len(text) > max_length:
+        return None, False, f"ጽሑፍ በጣም ረጅም ነው (ከ{max_length} ፊደላት በታች)።"
+
+    if not text or text.lower() == 'none' or text.lower() == 'null':
+        return None, False, "እባክዘ ትክክለኛ ዋጋ ያስገቡ።"
+
+    # Check for dangerous characters
+    for char in DANGEROUS_CHARS:
+        if char in text:
+            return None, False, f"የማይፈቀድ ባህሪ: '{char}'"
+
+    # Check for dangerous patterns (case insensitive)
+    text_lower = text.lower()
+    for pattern in DANGEROUS_PATTERNS:
+        if re.search(pattern, text_lower, re.IGNORECASE):
+            logger.warning(f"Blocked dangerous input pattern: {pattern} in text: {text[:50]}")
+            return None, False, "የማይፈቀድ ጽሑፍ ተገኝቷል። እባክዎ ሌላ ይሞክሩ።"
+
+    # Check for URLs in non-URL fields
+    if 'http://' in text_lower or 'https://' in text_lower:
+        return None, False, "URL እዚህ ላይ አይፈቀድም።"
+
+    # Check for email-like patterns
+    if '@' in text and '.' in text and not re.match(r'^[\w\.-]+@[\w\.-]+\.\w+$', text):
+        return None, False, "የማይፈቀድ ኢሜል ቅርጸት።"
+
+    return text, True, None
+
+
+def sanitize_url(url):
+    """
+    Validate URL input specifically for image URLs.
+
+    Returns: (sanitized_url, is_valid, error_message)
+    """
+    if not url:
+        return None, True, None  # URLs are optional
+
+    url = url.strip()
+
+    # Must start with http:// or https://
+    if not url.lower().startswith(('http://', 'https://')):
+        return None, False, "URL በ http:// ወይም https:// መጀመር አለበት።"
+
+    # Check for dangerous patterns in URL
+    url_lower = url.lower()
+    dangerous_url_patterns = ['javascript:', 'data:', 'file:', 'ftp:', 'ssh://']
+    for pattern in dangerous_url_patterns:
+        if pattern in url_lower:
+            return None, False, "የማይፈቀድ URL ቅርጸት።"
+
+    # Basic URL structure validation
+    try:
+        parsed = re.match(r'^https?://[\w\.-]+(?:\.[a-z]{2,})(?:/[^\s]*)?$', url, re.IGNORECASE)
+        if not parsed:
+            return None, False, "የማይፈቀድ URL ቅርጸት።"
+    except:
+        return None, False, "URL ማረጋገጥ አልተቻለም።"
+
+    return url, True, None
 
 
 class AddProductStates(StatesGroup):
@@ -179,9 +286,21 @@ def register_admin_handlers(bot):
     @bot.message_handler(state=AddProductStates.waiting_for_name)
     def process_name(message):
         chat_id = message.chat.id
-        name    = message.text.strip() if message.text else ""
-        if name.startswith('/') or len(name) < 2 or name.isdigit():
-            bot.send_message(chat_id, "⚠️ እባክዎ ትክክለኛ የጫማ ስም ያስገቡ፦")
+        raw_name = message.text.strip() if message.text else ""
+
+        # Validate and sanitize the product name
+        name, is_valid, error_msg = sanitize_input(raw_name, max_length=100)
+        if not is_valid:
+            bot.send_message(chat_id, f"⚠️ {error_msg}")
+            return
+
+        # Additional product name checks
+        if name.isdigit():
+            bot.send_message(chat_id, "⚠️ የምርት ስም ቁጥር ብቻ መሆን አይችልም። እባክዎ ሙሉ ስም ያስገቡ።")
+            return
+
+        if name.startswith('/'):
+            bot.send_message(chat_id, "⚠️ የምርት ስም በ / መጀመር አይችልም።")
             return
 
         bot.set_state(message.from_user.id, AddProductStates.waiting_for_category, chat_id)
@@ -360,9 +479,16 @@ def register_admin_handlers(bot):
     @bot.message_handler(state=AddProductStates.waiting_for_variant_color)
     def process_variant_color(message):
         chat_id = message.chat.id
-        color   = message.text.strip() if message.text else ""
-        if len(color) < 2 or color.isdigit():
-            bot.send_message(chat_id, "⚠️ ትክክለኛ ቀለም ያስገቡ፦")
+        raw_color = message.text.strip() if message.text else ""
+
+        # Validate and sanitize the color
+        color, is_valid, error_msg = sanitize_input(raw_color, max_length=30)
+        if not is_valid:
+            bot.send_message(chat_id, f"⚠️ {error_msg}")
+            return
+
+        if color.isdigit():
+            bot.send_message(chat_id, "⚠️ ቀለም ቁጥር መሆን አይችልም። እባክዎ ትክክለኛ ቀለም ያስገቡ።")
             return
 
         with bot.retrieve_data(message.from_user.id, chat_id) as data:
@@ -397,58 +523,106 @@ def register_admin_handlers(bot):
         image_url        = None
         telegram_file_id = None
 
+        logger.info(f"Processing variant image - content_type: {message.content_type}")
+
+        # Handle photo content type (Telegram photo)
         if message.content_type == 'photo':
-            telegram_file_id = message.photo[-1].file_id
-        else:
-            text = message.text.strip() if message.text else ""
-            if text.lower() == 'skip':
-                pass
-            elif text.startswith('http://') or text.startswith('https://'):
-                image_url = text
+            # Get the highest resolution photo (last in array)
+            if message.photo and len(message.photo) > 0:
+                telegram_file_id = message.photo[-1].file_id
+                logger.info(f"Got Telegram photo with file_id: {telegram_file_id}")
             else:
                 bot.send_message(chat_id,
-                    "⚠️ ፎቶ ይላኩ፣ URL ያስገቡ ወይም <code>skip</code> ይጻፉ፦", parse_mode="HTML")
+                    "⚠️ ምስል ማግኘት አልተሳካም። ደግሞ ይሞክሩ።")
                 return
+
+        # Handle text content type (URL or skip)
+        elif message.content_type == 'text':
+            text = message.text.strip() if message.text else ""
+            logger.info(f"Processing text input for image: '{text[:50]}...'")
+
+            if text.lower() == 'skip':
+                # No image - proceed with None values
+                pass
+            elif text.startswith('http://') or text.startswith('https://'):
+                # Validate URL before using
+                url, is_valid, error_msg = sanitize_url(text)
+                if not is_valid:
+                    bot.send_message(chat_id, f"⚠️ {error_msg}")
+                    return
+                image_url = url
+                logger.info(f"Got valid URL: {image_url}")
+            else:
+                bot.send_message(chat_id,
+                    "⚠️ ፎቶ ይላኩ፣ URL ያስገቡ (http://... ወይም https://...) ወይም <code>skip</code> ይጻፉ፦", parse_mode="HTML")
+                return
+
+        # Handle any other content type
+        else:
+            bot.send_message(chat_id,
+                "⚠️ እባክዎ ፎቶ ይላኩ፣ URL ያስገቡ ወይም <code>skip</code> ይጻፉ፦", parse_mode="HTML")
+            return
 
         try:
             with bot.retrieve_data(message.from_user.id, chat_id) as data:
+                product_id = data.get('product_id')
+                size = data.get('variant_size')
+                color = data.get('variant_color')
+                stock = data.get('variant_stock')
+
+                # Validate we have all required data
+                if not product_id or not size:
+                    bot.send_message(chat_id, "❌ የሆነ ችግር ተከስቷል። ደግሞ ይጀምሩ።")
+                    bot.delete_state(message.from_user.id, chat_id)
+                    return
+
+                logger.info(f"Creating variant: product={product_id}, size={size}, color={color}, stock={stock}")
+
                 variant = db.db.add_product_variant(
-                    product_id=data['product_id'],
-                    size=data['variant_size'],
-                    color=data['variant_color'],
-                    stock=data['variant_stock'],
+                    product_id=product_id,
+                    size=int(size),
+                    color=str(color) if color else 'N/A',
+                    stock=int(stock) if stock else 0,
                     image_url=image_url,
                     telegram_file_id=telegram_file_id,
                 )
 
                 if not variant:
-                    bot.send_message(chat_id, "❌ Variant ማስቀመጥ አልተሳካም።")
+                    logger.error(f"Variant creation returned None for product {product_id}")
+                    bot.send_message(chat_id, "❌ Variant ማስቀመጥ አልተሳካም። ደግሞ ይሞክሩ።")
                     bot.delete_state(message.from_user.id, chat_id)
                     return
 
-                price_display = f"{data['base_price']} ETB"
+                logger.info(f"Variant created successfully: {variant.get('id', 'unknown')}")
+
+                price_display = f"{data.get('base_price', 0)} ETB"
                 if data.get('original_price'):
                     price_display = f"<s>{data['original_price']}</s> {data['base_price']} ETB"
 
+                image_info = '🖼️ Telegram Photo ✅' if telegram_file_id else (('🔗 ' + image_url) if image_url else '📷 ምስል የለም')
+
                 bot.send_message(chat_id,
                     f"✅ <b>Variant ተቀምጧል!</b>\n\n"
-                    f"📐 Size: {data['variant_size']}\n"
-                    f"🎨 Color: {data['variant_color']}\n"
-                    f"📦 Stock: {data['variant_stock']}\n"
-                    f"{'🖼️ Telegram Photo ✅' if telegram_file_id else ('🔗 ' + (image_url or 'N/A'))}",
+                    f"📐 Size: {size}\n"
+                    f"🎨 Color: {color}\n"
+                    f"📦 Stock: {stock}\n"
+                    f"{image_info}",
                     parse_mode="HTML")
 
                 markup = InlineKeyboardMarkup()
                 markup.add(
                     InlineKeyboardButton("➕ ሌላ Size/Color አክል",
-                                         callback_data=f"add_more_variants_{data['product_id']}"),
+                                         callback_data=f"add_more_variants_{product_id}"),
                     InlineKeyboardButton("✅ ጨርሻለሁ", callback_data="finish_product"),
                 )
                 bot.send_message(chat_id, "ሌላ Size ወይም Color ማከል ይፈልጋሉ?", reply_markup=markup)
 
+        except KeyError as ke:
+            logger.error(f"process_variant_image KeyError: {ke}")
+            bot.send_message(chat_id, "❌ የሆነ ችግር ተከስቷል። ደግሞ ይጀምሩ።")
         except Exception as e:
-            logger.error(f"process_variant_image error: {e}")
-            bot.send_message(chat_id, "❌ ዳታቤዝ ስህተት ተከስቷል።")
+            logger.error(f"process_variant_image error: {e}", exc_info=True)
+            bot.send_message(chat_id, "❌ ዳታቤዝ ስህተት ተከስቷል። ደግሞ ይሞክሩ።")
 
         bot.delete_state(message.from_user.id, chat_id)
 
@@ -484,10 +658,17 @@ def register_admin_handlers(bot):
     @bot.message_handler(state=AddVariantStates.waiting_for_color)
     def process_new_variant_color(message):
         chat_id = message.chat.id
-        color   = message.text.strip() if message.text else ""
-        if len(color) < 2 or color.isdigit():
-            bot.send_message(chat_id, "⚠️ ትክክለኛ ቀለም ያስገቡ፦")
+        raw_color = message.text.strip() if message.text else ""
+
+        color, is_valid, error_msg = sanitize_input(raw_color, max_length=30)
+        if not is_valid:
+            bot.send_message(chat_id, f"⚠️ {error_msg}")
             return
+
+        if color.isdigit():
+            bot.send_message(chat_id, "⚠️ ቀለም ቁጥር መሆን አይችልም። እባክዎ ትክክለኛ ቀለም ያስገቡ፦")
+            return
+
         with bot.retrieve_data(message.from_user.id, chat_id) as data:
             data['variant_color'] = color
         bot.set_state(message.from_user.id, AddVariantStates.waiting_for_stock, chat_id)
@@ -513,44 +694,76 @@ def register_admin_handlers(bot):
         image_url        = None
         telegram_file_id = None
 
+        logger.info(f"Processing new variant image - content_type: {message.content_type}")
+
         if message.content_type == 'photo':
-            telegram_file_id = message.photo[-1].file_id
-        else:
+            if message.photo and len(message.photo) > 0:
+                telegram_file_id = message.photo[-1].file_id
+                logger.info(f"Got Telegram photo with file_id: {telegram_file_id}")
+            else:
+                bot.send_message(chat_id, "⚠️ ምስል ማግኘት አልተሳካም።")
+                return
+
+        elif message.content_type == 'text':
             text = message.text.strip() if message.text else ""
             if text.lower() == 'skip':
                 pass
             elif text.startswith('http://') or text.startswith('https://'):
-                image_url = text
+                # Validate URL
+                url, is_valid, error_msg = sanitize_url(text)
+                if not is_valid:
+                    bot.send_message(chat_id, f"⚠️ {error_msg}")
+                    return
+                image_url = url
             else:
                 bot.send_message(chat_id,
-                    "⚠️ ፎቶ ይላኩ፣ URL ያስገቡ ወይም <code>skip</code> ይጻፉ፦", parse_mode="HTML")
+                    "⚠️ ፎቶ ይላኩ፣ URL ያስገቡ (http://... ወይም https://...) ወይም <code>skip</code> ይጻፉ፦", parse_mode="HTML")
                 return
+        else:
+            bot.send_message(chat_id,
+                "⚠️ እባክዎ ፎቶ ይላኩ፣ URL ያስገቡ ወይም <code>skip</code> ይጻፉ፦", parse_mode="HTML")
+            return
 
         try:
             with bot.retrieve_data(message.from_user.id, chat_id) as data:
+                product_id = data.get('product_id')
+                size = data.get('variant_size')
+                color = data.get('variant_color')
+                stock = data.get('variant_stock')
+
+                if not product_id or not size:
+                    bot.send_message(chat_id, "❌ የሆነ ችግር ተከስቷል። ደግሞ ይጀምሩ።")
+                    bot.delete_state(message.from_user.id, chat_id)
+                    return
+
+                logger.info(f"Creating additional variant: product={product_id}, size={size}, color={color}")
+
                 variant = db.db.add_product_variant(
-                    product_id=data['product_id'],
-                    size=data['variant_size'],
-                    color=data['variant_color'],
-                    stock=data['variant_stock'],
+                    product_id=product_id,
+                    size=int(size),
+                    color=str(color) if color else 'N/A',
+                    stock=int(stock) if stock else 0,
                     image_url=image_url,
                     telegram_file_id=telegram_file_id,
                 )
+
                 if variant:
+                    image_info = '🖼️ Telegram Photo ✅' if telegram_file_id else (('🔗 ' + image_url) if image_url else '📷 ምስል የለም')
                     bot.send_message(chat_id,
-                        f"✅ Size {data['variant_size']} / {data['variant_color']} ተቀምጧል!")
+                        f"✅ Size {size} / {color} ተቀምጧል!\n{image_info}")
                     markup = InlineKeyboardMarkup()
                     markup.add(
                         InlineKeyboardButton("➕ ሌላ ማከል",
-                                             callback_data=f"add_more_variants_{data['product_id']}"),
+                                             callback_data=f"add_more_variants_{product_id}"),
                         InlineKeyboardButton("✅ ጨርሻለሁ", callback_data="finish_product"),
                     )
                     bot.send_message(chat_id, "ሌላ ማከል ይፈልጋሉ?", reply_markup=markup)
                 else:
-                    bot.send_message(chat_id, "❌ ማስቀመጥ አልተሳካም።")
+                    bot.send_message(chat_id, "❌ ማስቀመጥ አልተሳካም። ደግሞ ይሞክሩ።")
+
         except Exception as e:
-            logger.error(f"process_new_variant_image error: {e}")
-            bot.send_message(chat_id, "❌ ዳታቤዝ ስህተት ተከስቷል።")
+            logger.error(f"process_new_variant_image error: {e}", exc_info=True)
+            bot.send_message(chat_id, "❌ ዳታቤዝ ስህተት ተከስቷል። ደግሞ ይሞክሩ።")
 
         bot.delete_state(message.from_user.id, chat_id)
 

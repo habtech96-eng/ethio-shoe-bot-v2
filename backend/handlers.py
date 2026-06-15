@@ -214,13 +214,17 @@ def register_handlers(bot):
         available     = [v for v in variants if int(v.get('stock', 0)) >= 1]
         base_price    = int(product.get('base_price', 0))
         original_price = product.get('original_price')
+        total_stock   = sum(int(v.get('stock', 0)) for v in variants)
 
         price_line = f"💵 {base_price} ETB"
         if original_price and int(original_price) > base_price:
             price_line = f"💵 <s>{original_price}</s> <b>{base_price} ETB</b>"
 
-        if not available:
-            stock_line = "❌ አልቀረም (Out of Stock)"
+        # Check if completely out of stock
+        is_out_of_stock = total_stock <= 0 or len(available) == 0
+
+        if is_out_of_stock:
+            stock_line = "❌ ይህ ጫማ በአሁኑ ሰዓት አልቋል"
         else:
             sizes  = sorted(set(int(v['size'])  for v in available))
             colors = sorted(set(v['color']       for v in available))
@@ -237,7 +241,13 @@ def register_handlers(bot):
             f"{stock_line}\n\n"
             f"📝 {product.get('description', 'ጥሩ ጥራት ያለው ጫማ')}"
         )
-        markup = keyboards.get_product_detail_keyboard(product['id'])
+
+        # Only show "Add to Cart" button if product has stock
+        if is_out_of_stock:
+            markup = types.InlineKeyboardMarkup()  # Empty markup - no buttons
+            caption += "\n\n⚠️ <i>ለጊዜው የለም - ቆይተው ይሞክሩ</i>"
+        else:
+            markup = keyboards.get_product_detail_keyboard(product['id'])
 
         sent = False
         if available:
@@ -258,6 +268,25 @@ def register_handlers(bot):
                     sent = True
                 except Exception as e:
                     logger.warning(f"URL photo send failed: {e}")
+        # If no stock or couldn't send photo, try the first variant that has an image
+        elif not sent:
+            for v in variants:
+                if v.get('telegram_file_id'):
+                    try:
+                        bot.send_photo(chat_id, v['telegram_file_id'],
+                                       caption=caption, parse_mode="HTML", reply_markup=markup)
+                        sent = True
+                        break
+                    except Exception:
+                        continue
+                if v.get('image_url'):
+                    try:
+                        bot.send_photo(chat_id, v['image_url'],
+                                       caption=caption, parse_mode="HTML", reply_markup=markup)
+                        sent = True
+                        break
+                    except Exception:
+                        continue
 
         if not sent:
             bot.send_message(chat_id, caption, parse_mode="HTML", reply_markup=markup)
@@ -277,8 +306,12 @@ def register_handlers(bot):
 
         variants  = product.get('product_variants') or []
         available = [v for v in variants if int(v.get('stock', 0)) >= 1]
+
+        # IMPORTANT: Do not allow size selection if out of stock
         if not available:
-            bot.send_message(chat_id, "⚠️ ምርቱ አሁን አልቀረም።")
+            bot.send_message(chat_id,
+                "⚠️ ይህ ጫማ በአሁኑ ሰዓት አልቋል።\n\n"
+                "እባክዎ ቆይተው ይሞክሩ ወይም ሌሎች ምርቶችን ይመልከቱ።")
             return
 
         sizes = sorted(set(int(v['size']) for v in available))

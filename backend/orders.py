@@ -301,53 +301,97 @@ def register_order_handlers(bot):
         # Clean reference - remove spaces/dashes
         txn_ref = txn_ref.replace(" ", "").replace("-", "")
 
-        with bot.retrieve_data(telegram_id, chat_id) as data:
-            user_id        = data['user_id']
-            phone          = data['phone']
-            address_id     = data.get('address_id')
-            subtotal       = data['subtotal']
-            delivery_fee   = data['delivery_fee']
-            total          = data['total']
-            order_items    = data.get('order_items', [])
-            payment_method = data['payment_method']
-            customer_name  = data.get('customer_name', 'Customer')
+        logger.info(f"Processing order for user {telegram_id}, reference: {txn_ref}")
+
+        try:
+            with bot.retrieve_data(telegram_id, chat_id) as data:
+                user_id        = data['user_id']
+                phone          = data['phone']
+                address_id     = data.get('address_id')
+                subtotal       = data['subtotal']
+                delivery_fee   = data['delivery_fee']
+                total          = data['total']
+                order_items    = data.get('order_items', [])
+                payment_method = data['payment_method']
+                customer_name  = data.get('customer_name', 'Customer')
+
+                logger.info(f"Order data retrieved: user={user_id}, phone={phone}, address={address_id}, items={len(order_items)}")
+
+        except Exception as e:
+            logger.error(f"Failed to retrieve order data from state: {e}")
+            bot.send_message(chat_id, "❌ የትዕዛዝ ዳታ ማግኘት አልተሳካም። /start ን ጫኑ።")
+            bot.delete_state(telegram_id, chat_id)
+            return
 
         if not address_id:
-            bot.send_message(chat_id, "❌ አድራሻ አልተቀመጠም። /start ን ጫኑ።")
+            bot.send_message(chat_id, "❌ አድራሻ አልተቀመጠም። ደግሞ ለመጀመር /start ን ጫኑ።")
             bot.delete_state(telegram_id, chat_id)
             return
 
-        order = db.db.create_order(
-            user_id=user_id,
-            contact_phone=phone,
-            shipping_address_id=address_id,
-            subtotal=subtotal,
-            items=order_items,
-            delivery_fee=delivery_fee,
-            discount_amount=0,
-            promo_code_id=None,
-            customer_name=customer_name,
-        )
-
-        if not order:
-            bot.send_message(chat_id, "❌ ትዕዛዝ ማስቀመጥ አልተሳካም። ደግሞ ይሞክሩ።")
+        if not order_items:
+            bot.send_message(chat_id, "❌ ጋሪ ባዶ ነው። እባክዎ ምርት ያክሉ።")
             bot.delete_state(telegram_id, chat_id)
             return
 
-        payment = db.db.create_payment(
-            order_id=order['id'],
-            payment_method=payment_method,
-            transaction_reference=txn_ref,
-        )
+        try:
+            order = db.db.create_order(
+                user_id=user_id,
+                contact_phone=phone,
+                shipping_address_id=address_id,
+                subtotal=subtotal,
+                items=order_items,
+                delivery_fee=delivery_fee,
+                discount_amount=0,
+                promo_code_id=None,
+                customer_name=customer_name,
+            )
 
-        if not payment:
+            if not order:
+                logger.error(f"create_order returned None for user {user_id}")
+                bot.send_message(chat_id, "❌ ትዕዛዝ ማስቀመጥ አልተሳካም። ይህ የሚሆነው ክምችት በቂ ስለማይሆን ወይም የዳታቤዝ ችግር ሊሆን ይችላል። ደግሞ ይሞክሩ።")
+                bot.delete_state(telegram_id, chat_id)
+                return
+
+            logger.info(f"Order created successfully: {order.get('id')}")
+
+        except Exception as e:
+            logger.error(f"create_order exception for user {user_id}: {e}", exc_info=True)
+            bot.send_message(chat_id, "❌ ትዕዛዝ ማስቀመጥ አልተሳካም። ዳታቤዝ ችግር ተከስቷል። ቆይተው ይሞክሩ።")
+            bot.delete_state(telegram_id, chat_id)
+            return
+
+        # Create payment record
+        try:
+            payment = db.db.create_payment(
+                order_id=order['id'],
+                payment_method=payment_method,
+                transaction_reference=txn_ref,
+            )
+
+            if not payment:
+                logger.error(f"create_payment returned None for order {order['id']}")
+                bot.send_message(chat_id,
+                    "⚠️ ትዕዛዙ ተቀምጧል ነገር ግን ክፍያ ማስቀመጥ አልተሳካም። Admin ያነጋግሩ።")
+                bot.delete_state(telegram_id, chat_id)
+                return
+
+            logger.info(f"Payment created successfully: {payment.get('id')}")
+
+        except Exception as e:
+            logger.error(f"create_payment exception for order {order['id']}: {e}", exc_info=True)
             bot.send_message(chat_id,
-                "⚠️ ትዕዛዙ ተቀምጧል ነገር ግን ክፍያ ማስቀመጥ አልተሳካም። Admin ያነጋግሩ።")
+                "⚠️ ትዕዛዙ ተቀምጧል ነገር ግን ክፍያ ማስቀመጥ አልተሳካም። እባክዎ ደግሞ ይሞክሩ።")
             bot.delete_state(telegram_id, chat_id)
             return
 
-        db.db.clear_cart(user_id)
+        # Clear cart only after successful order AND payment creation
+        try:
+            db.db.clear_cart(user_id)
+            logger.info(f"Cart cleared for user {user_id}")
+        except Exception as e:
+            logger.error(f"clear_cart exception: {e}")
 
+        # Success message to user
         bot.send_message(chat_id,
             f"✅ <b>ትዕዛዝዎ ተቀምጧል!</b>\n\n"
             f"🆔 Order: <code>#{order['id'][:8]}</code>\n"
@@ -356,29 +400,33 @@ def register_order_handlers(bot):
             f"⏳ ክፍያዎ ከተረጋገጠ በኋላ ምርትዎ ይላካል።",
             parse_mode="HTML", reply_markup=ReplyKeyboardRemove())
 
-        items_summary = ", ".join(
-            f"{it['product_name']} ({it['size']}/{it['color']})" for it in order_items
-        )
-        admin_text = (
-            f"🆕 <b>አዲስ ትዕዛዝ!</b>\n\n"
-            f"🆔 <code>#{order['id'][:8]}</code>\n"
-            f"👤 {customer_name} | 📞 {phone}\n"
-            f"👟 {items_summary}\n"
-            f"💳 {payment_method.upper()} Ref: <code>{txn_ref}</code>\n"
-            f"💰 {total} ETB"
-        )
-        markup = InlineKeyboardMarkup(row_width=2)
-        markup.add(
-            InlineKeyboardButton("✅ Verify Payment",
-                                 callback_data=f"verify_pay_{payment['id']}"),
-            InlineKeyboardButton("❌ Reject",
-                                 callback_data=f"reject_pay_{payment['id']}"),
-        )
-        for admin_id in ADMIN_IDS:
-            try:
-                bot.send_message(admin_id, admin_text, parse_mode="HTML", reply_markup=markup)
-            except Exception as e:
-                logger.error(f"Admin notification failed {admin_id}: {e}")
+        # Notify admins
+        try:
+            items_summary = ", ".join(
+                f"{it['product_name']} ({it['size']}/{it['color']})" for it in order_items
+            )
+            admin_text = (
+                f"🆕 <b>አዲስ ትዕዛዝ!</b>\n\n"
+                f"🆔 <code>#{order['id'][:8]}</code>\n"
+                f"👤 {customer_name} | 📞 {phone}\n"
+                f"👟 {items_summary}\n"
+                f"💳 {payment_method.upper()} Ref: <code>{txn_ref}</code>\n"
+                f"💰 {total} ETB"
+            )
+            markup = InlineKeyboardMarkup(row_width=2)
+            markup.add(
+                InlineKeyboardButton("✅ Verify Payment",
+                                     callback_data=f"verify_pay_{payment['id']}"),
+                InlineKeyboardButton("❌ Reject",
+                                     callback_data=f"reject_pay_{payment['id']}"),
+            )
+            for admin_id in ADMIN_IDS:
+                try:
+                    bot.send_message(admin_id, admin_text, parse_mode="HTML", reply_markup=markup)
+                except Exception as e:
+                    logger.error(f"Admin notification failed {admin_id}: {e}")
+        except Exception as e:
+            logger.error(f"Admin notification error: {e}")
 
         bot.delete_state(telegram_id, chat_id)
 
