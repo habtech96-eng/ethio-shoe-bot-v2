@@ -88,6 +88,7 @@ def register_order_handlers(bot):
                 'color':         variant.get('color', 'N/A'),
                 'quantity':      qty,
                 'price_per_unit': price,
+                'variant_id':    variant.get('id'),  # For stock decrement
             })
 
         delivery_fee = 50
@@ -292,9 +293,13 @@ def register_order_handlers(bot):
         telegram_id = message.from_user.id
         txn_ref     = message.text.strip() if message.text else ""
 
+        # Basic validation - minimum length and format
         if len(txn_ref) < 4:
             bot.send_message(chat_id, "⚠️ ትክክለኛ Reference ቁጥር ያስገቡ (ቢያንስ 4 ፊደላት)፦")
             return
+
+        # Clean reference - remove spaces/dashes
+        txn_ref = txn_ref.replace(" ", "").replace("-", "")
 
         with bot.retrieve_data(telegram_id, chat_id) as data:
             user_id        = data['user_id']
@@ -321,6 +326,7 @@ def register_order_handlers(bot):
             delivery_fee=delivery_fee,
             discount_amount=0,
             promo_code_id=None,
+            customer_name=customer_name,
         )
 
         if not order:
