@@ -1,6 +1,7 @@
 """
 Main bot handlers for Ethio Shoe Store.
 Handles /start, category browsing, product display, cart, and order history.
+Production-grade with proper error handling and state management.
 """
 import sys
 import os
@@ -17,6 +18,14 @@ except ImportError:
     from config import ADMIN_IDS
 
 logger = logging.getLogger(__name__)
+
+# Category display mapping: DB value -> User-facing Amharic label
+CATEGORY_LABELS = {
+    'የወንዶች': 'የወንዶች (Men)',
+    'የሴቶች': 'የሴቶች (Women)',
+    'የህፃናት': 'የህፃናት (Kids)',
+    'የሁለቱም/Unisex': 'ለሁሉም (Unisex)',
+}
 
 
 def register_handlers(bot):
@@ -36,11 +45,11 @@ def register_handlers(bot):
             logger.error(f"create_user error for {telegram_id}: {e}")
 
         if telegram_id in ADMIN_IDS:
-            bot.send_message(chat_id, f"👨‍💼 ሰላም አድሚን {first_name}!",
+            bot.send_message(chat_id, f"👨‍💼 ሰላም አድሚን {first_name}! ወደ አድሚን ፓነል በደህና መጡ።",
                              reply_markup=keyboards.get_admin_main_menu())
         else:
             bot.send_message(chat_id,
-                             f"👋 እንኳን ወደ Ethio Shoe Store በደህና መጡ፣ {first_name}!",
+                             f"👋 እንኳን ወደ Ethio Shoe Store በደህና መጡ፣ {first_name}! ጥሩ ጫማዎችን ለማግኘት ያማረንን ምርት ይመልከቱ።",
                              reply_markup=keyboards.get_main_menu())
 
     # ---------------------------------------------------------------- /cart
@@ -49,12 +58,7 @@ def register_handlers(bot):
     def show_cart_cmd(message):
         _show_cart(bot, message.chat.id, message.from_user.id)
 
-    # ----------------------------------------------------------------
-    # Main menu text handler.
-    # CRITICAL: content_types=['text'] prevents firing on photos/contacts.
-    # state=None ensures this ONLY fires when user has NO active state,
-    # preventing it from swallowing checkout/admin state inputs.
-    # ----------------------------------------------------------------
+    # ---------------------------------------------------------------- main menu handler
 
     @bot.message_handler(content_types=['text'], func=lambda message: True, state=None)
     def handle_text(message):
@@ -62,29 +66,29 @@ def register_handlers(bot):
         telegram_id = message.from_user.id
         text        = message.text.strip()
 
-        if text == "🔐 Admin Panel":
+        if text == "🔐 አድሚን ፓነል":
             if telegram_id in ADMIN_IDS:
-                bot.send_message(chat_id, "🛠️ Admin Panel፦",
+                bot.send_message(chat_id, "🛠️ አድሚን ፓነል፦",
                                  reply_markup=keyboards.get_admin_panel_keyboard())
             else:
-                bot.send_message(chat_id, "⚠️ ይቅርታ፣ ይህ አልተፈቀደም።")
+                bot.send_message(chat_id, "⚠️ ይቅርታ፣ ይህ ተግባር አልተፈቀደም።")
 
-        elif text == "🔄 ወደ ዋና ማውጫ":
+        elif text == "🔄 ወደ ዋና መመለሻ":
             mk = keyboards.get_admin_main_menu() if telegram_id in ADMIN_IDS else keyboards.get_main_menu()
-            bot.send_message(chat_id, "🏠 ወደ ዋና ማውጫ ተመልሰዋል።", reply_markup=mk)
+            bot.send_message(chat_id, "🏠 ወደ ዋና መምሪያ ተመልሰዋል።", reply_markup=mk)
 
-        elif text == "👟 ምርቶችን እይ":
+        elif text == "👟 ጫማዎችን ይመልከቱ":
             bot.send_message(chat_id, "🗂️ ምድቡን ይምረጡ፦",
                              reply_markup=keyboards.get_category_menu())
 
-        elif text == "🛒 ጋሪዬ":
+        elif text == "🛒 የኔ ጋሪ":
             _show_cart(bot, chat_id, telegram_id)
 
-        elif text == "📞 እኛን ለማግኘት":
+        elif text == "📞 አግኙን":
             bot.send_message(chat_id,
                 "📞 ስልክ: +251938649925\n⏰ ሰ-ሐ 8:00–20:00 | ሐሙ 10:00–18:00")
 
-        elif text == "🛍️ የእኔ ትዕዛዞች":
+        elif text == "🛍️ ትዕዛዞቼ":
             _show_my_orders(bot, chat_id, telegram_id)
 
         else:
@@ -96,7 +100,7 @@ def register_handlers(bot):
     def _show_cart(bot, chat_id, telegram_id):
         user = db.db.get_user(telegram_id)
         if not user:
-            bot.send_message(chat_id, "⚠️ /start ን ጫኑ።")
+            bot.send_message(chat_id, "⚠️ /start ን ይጫኑ።")
             return
 
         cart_items = db.db.get_cart_items(user['id'])
@@ -135,7 +139,7 @@ def register_handlers(bot):
     def _show_my_orders(bot, chat_id, telegram_id):
         user = db.db.get_user(telegram_id)
         if not user:
-            bot.send_message(chat_id, "⚠️ /start ን ጫኑ።")
+            bot.send_message(chat_id, "⚠️ /start ን ይጫኑ።")
             return
 
         orders = db.db.get_orders(user_id=user['id'])
@@ -144,10 +148,10 @@ def register_handlers(bot):
             return
 
         STATUS_MAP = {
-            'pending':   '⏱️ ይጠበቃል',
+            'pending':   '⏱️ በመጠባበቅ ላይ',
             'confirmed': '✅ ተረጋግጧል',
             'shipped':   '🚚 ተልኳል',
-            'delivered': '📦 ደርሷል',
+            'delivered': '📦 ተጠናቋል',
             'cancelled': '❌ ተሰርዟል',
         }
 
@@ -161,9 +165,18 @@ def register_handlers(bot):
                 f"🚦 {status}"
             )
             markup = types.InlineKeyboardMarkup()
-            if order.get('order_status') == 'pending':
+            payment = order.get('payments')
+            # Check for pending payment
+            if payment and isinstance(payment, list) and len(payment) > 0:
+                pay = payment[0]
+                if pay.get('is_verified') is False and order.get('order_status') == 'pending':
+                    markup.add(types.InlineKeyboardButton(
+                        "💳 ክፍያ Reference አስገባ",
+                        callback_data=f"pending_pay_{order['id']}"
+                    ))
+            elif order.get('order_status') == 'pending':
                 markup.add(types.InlineKeyboardButton(
-                    "💳 ክፍያ Reference ያስገቡ",
+                    "💳 ክፍያ Reference አስገባ",
                     callback_data=f"pending_pay_{order['id']}"
                 ))
             bot.send_message(chat_id, order_text, parse_mode="HTML", reply_markup=markup)
@@ -183,11 +196,13 @@ def register_handlers(bot):
             bot.send_message(chat_id, "❌ ምርቶችን ለማምጣት ስህተት ተከስቷል።")
             return
 
+        label = CATEGORY_LABELS.get(category, category)
         if not products:
             bot.send_message(chat_id,
-                f"⚠️ '<b>{category}</b>' ምድብ ውስጥ ምርት አልተገኘም።", parse_mode="HTML")
+                f"⚠️ '<b>{label}</b>' ምድብ ውስጥ ምርት አልተገኘም።", parse_mode="HTML")
             return
 
+        bot.send_message(chat_id, f"📂 <b>{label}</b> ምርቶች፦", parse_mode="HTML")
         for product in products[:10]:
             try:
                 _send_product_card(bot, chat_id, product)
@@ -205,7 +220,7 @@ def register_handlers(bot):
             price_line = f"💵 <s>{original_price}</s> <b>{base_price} ETB</b>"
 
         if not available:
-            stock_line = "❌ Out of Stock"
+            stock_line = "❌ አልቀረም (Out of Stock)"
         else:
             sizes  = sorted(set(int(v['size'])  for v in available))
             colors = sorted(set(v['color']       for v in available))
@@ -227,6 +242,7 @@ def register_handlers(bot):
         sent = False
         if available:
             lead = available[0]
+            # Try Telegram file_id first (fastest)
             if lead.get('telegram_file_id'):
                 try:
                     bot.send_photo(chat_id, lead['telegram_file_id'],
@@ -234,6 +250,7 @@ def register_handlers(bot):
                     sent = True
                 except Exception as e:
                     logger.warning(f"file_id send failed: {e}")
+            # Fallback to URL
             if not sent and lead.get('image_url'):
                 try:
                     bot.send_photo(chat_id, lead['image_url'],
@@ -245,7 +262,7 @@ def register_handlers(bot):
         if not sent:
             bot.send_message(chat_id, caption, parse_mode="HTML", reply_markup=markup)
 
-    # ---------------------------------------------------------------- product → size → color → cart
+    # ---------------------------------------------------------------- product -> size -> color -> cart
 
     @bot.callback_query_handler(func=lambda call: call.data.startswith("product_"))
     def handle_product_selection(call):
@@ -261,7 +278,7 @@ def register_handlers(bot):
         variants  = product.get('product_variants') or []
         available = [v for v in variants if int(v.get('stock', 0)) >= 1]
         if not available:
-            bot.send_message(chat_id, "⚠️ ምርቱ አሁን Out of Stock ነው።")
+            bot.send_message(chat_id, "⚠️ ምርቱ አሁን አልቀረም።")
             return
 
         sizes = sorted(set(int(v['size']) for v in available))
@@ -319,7 +336,7 @@ def register_handlers(bot):
 
         user = db.db.get_user(telegram_id)
         if not user:
-            bot.send_message(chat_id, "⚠️ /start ን ጫኑ።")
+            bot.send_message(chat_id, "⚠️ /start ን ይጫኑ።")
             return
 
         product = db.db.get_product(product_id)
@@ -340,12 +357,12 @@ def register_handlers(bot):
         result = db.db.add_to_cart(user['id'], variant['id'], quantity=1)
         if result:
             bot.send_message(chat_id,
-                f"✅ <b>{product.get('name')}</b> (Size {size}, {color}) ጋሪዎ ላይ ተጨምሯል!\n\n"
+                f"✅ <b>{product.get('name')}</b> (Size {size}, {color}) ወደ ጋሪ ተጨምሯል!\n\n"
                 f"💵 {int(product.get('base_price', 0))} ETB\n\n"
-                f"🛒 ጋሪ ለማየት /cart ወይም 🛒 ጋሪዬ ን ይጫኑ።",
+                f"🛒 ጋሪ ለማየት /cart ን ይጫኑ ወይም 🛒 የኔ ጋሪ ን ይጫኑ።",
                 parse_mode="HTML")
         else:
-            bot.send_message(chat_id, "❌ ጋሪ ላይ ማከል አልተሳካም።")
+            bot.send_message(chat_id, "❌ ወደ ጋሪ ማከል አልተሳካም።")
 
     # ---------------------------------------------------------------- cart actions
 
@@ -360,4 +377,4 @@ def register_handlers(bot):
             bot.send_message(chat_id, "⚠️ ስህተት ተከስቷል።")
             return
         db.db.clear_cart(user['id'])
-        bot.send_message(chat_id, "🗑️ ጋሪዎ ጸዳ።")
+        bot.send_message(chat_id, "🗑️ ጋሪዎ ተጸድቷል።")

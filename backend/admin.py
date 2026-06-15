@@ -47,10 +47,10 @@ class AddVariantStates(StatesGroup):
 def _category_markup():
     m = InlineKeyboardMarkup(row_width=2)
     m.add(
-        InlineKeyboardButton("👞 የወንዶች",         callback_data="admin_cat_የወንዶች"),
-        InlineKeyboardButton("👠 የሴቶች",          callback_data="admin_cat_የሴቶች"),
-        InlineKeyboardButton("👶 የህፃናት",         callback_data="admin_cat_የህፃናት"),
-        InlineKeyboardButton("👥 የሁለቱም/Unisex",  callback_data="admin_cat_የሁለቱም/Unisex"),
+        InlineKeyboardButton("👞 የወንዶች (Men)",      callback_data="admin_cat_የወንዶች"),
+        InlineKeyboardButton("👠 የሴቶች (Women)",    callback_data="admin_cat_የሴቶች"),
+        InlineKeyboardButton("👟 የህፃናት (Kids)",    callback_data="admin_cat_የህፃናት"),
+        InlineKeyboardButton("👥 ለሁሉም (Unisex)",  callback_data="admin_cat_የሁለቱም/Unisex"),
     )
     return m
 

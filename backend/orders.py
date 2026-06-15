@@ -230,8 +230,8 @@ def register_order_handlers(bot):
     def _ask_payment_method(bot, chat_id, telegram_id):
         markup = InlineKeyboardMarkup(row_width=1)
         markup.add(
-            InlineKeyboardButton("📱 Telebirr", callback_data="pay_telebirr"),
-            InlineKeyboardButton("🏦 CBE (ንግድ ባንክ)", callback_data="pay_cbe"),
+            InlineKeyboardButton("📱 ቴሌቢር (Telebirr)", callback_data="pay_telebirr"),
+            InlineKeyboardButton("🏦 ሲቢኢ (CBE Bank)", callback_data="pay_cbe"),
         )
         bot.set_state(telegram_id, CustomerOrderStates.waiting_for_payment_method, chat_id)
         bot.send_message(chat_id, "💳 የክፍያ ዘዴ ይምረጡ፦", reply_markup=markup)
