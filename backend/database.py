@@ -42,10 +42,29 @@ TXN_REF_PATTERNS = {
 
 def validate_transaction_ref(method: str, ref: str) -> bool:
     """Validate transaction reference format for the payment method."""
+    method = method.strip().lower()
     if method not in TXN_REF_PATTERNS:
         return False
     pattern = TXN_REF_PATTERNS[method]
     return bool(re.match(pattern, ref.strip()))
+
+
+def normalize_payment_method(method: str) -> Optional[str]:
+    """Normalize payment method to match DB CHECK constraint ('telebirr' | 'cbe')."""
+    normalized = (method or '').strip().lower()
+    if normalized in ALLOWED_PAYMENT_METHODS:
+        return normalized
+    return None
+
+
+def format_db_error(error: Exception) -> str:
+    """Extract a clear database error message for logging."""
+    parts = [str(error)]
+    for attr in ('message', 'details', 'hint', 'code'):
+        value = getattr(error, attr, None)
+        if value:
+            parts.append(f"{attr}={value}")
+    return ' | '.join(parts)
 
 
 class DatabaseManager:
@@ -256,22 +275,86 @@ class DatabaseManager:
 
     def decrement_variant_stock(self, variant_id: str, quantity: int) -> bool:
         """Atomically decrement stock. Returns False if insufficient stock."""
+        quantity = int(quantity)
+        if quantity <= 0:
+            return False
         try:
-            # Get current stock
             variant = self.get_variant(variant_id)
             if not variant:
                 logger.error(f"decrement_variant_stock: variant {variant_id} not found")
                 return False
             current_stock = int(variant.get('stock', 0))
             if current_stock < quantity:
-                logger.warning(f"decrement_variant_stock: insufficient stock ({current_stock} < {quantity})")
+                logger.warning(
+                    f"decrement_variant_stock: insufficient stock for {variant_id} "
+                    f"({current_stock} < {quantity})"
+                )
                 return False
             new_stock = current_stock - quantity
+            r = (
+                self.client.table('product_variants')
+                .update({'stock': new_stock})
+                .eq('id', variant_id)
+                .gte('stock', quantity)
+                .execute()
+            )
+            if not r.data:
+                logger.warning(
+                    f"decrement_variant_stock: atomic update failed for {variant_id} "
+                    f"(stock may have changed)"
+                )
+                return False
+            return True
+        except Exception as e:
+            logger.error(f"decrement_variant_stock error: {format_db_error(e)}")
+            return False
+
+    def _restore_variant_stock(self, variant_id: str, quantity: int) -> bool:
+        """Restore stock during checkout rollback."""
+        quantity = int(quantity)
+        if quantity <= 0:
+            return True
+        try:
+            variant = self.get_variant(variant_id)
+            if not variant:
+                logger.error(f"_restore_variant_stock: variant {variant_id} not found")
+                return False
+            new_stock = int(variant.get('stock', 0)) + quantity
             self.client.table('product_variants').update({'stock': new_stock}).eq('id', variant_id).execute()
             return True
         except Exception as e:
-            logger.error(f"decrement_variant_stock error: {e}")
+            logger.error(f"_restore_variant_stock error: {format_db_error(e)}")
             return False
+
+    def _rollback_checkout(self, order_id: Optional[str],
+                           decremented: List[tuple]) -> None:
+        """Undo stock decrements and remove a partially created order."""
+        for variant_id, quantity in reversed(decremented):
+            self._restore_variant_stock(variant_id, quantity)
+        if order_id:
+            try:
+                self.client.table('orders').delete().eq('id', order_id).execute()
+                logger.info(f"_rollback_checkout: deleted order {order_id}")
+            except Exception as e:
+                logger.error(f"_rollback_checkout delete order error: {format_db_error(e)}")
+
+    def _rollback_order_with_stock(self, order_id: str) -> None:
+        """Restore variant stock from order_items and delete the order."""
+        try:
+            items_r = (
+                self.client.table('order_items')
+                .select('variant_id, quantity')
+                .eq('order_id', order_id)
+                .execute()
+            )
+            for item in items_r.data or []:
+                variant_id = item.get('variant_id')
+                if variant_id:
+                    self._restore_variant_stock(variant_id, int(item.get('quantity', 0)))
+            self.client.table('orders').delete().eq('id', order_id).execute()
+            logger.info(f"_rollback_order_with_stock: rolled back order {order_id}")
+        except Exception as e:
+            logger.error(f"_rollback_order_with_stock error: {format_db_error(e)}")
 
     def check_variant_stock(self, variant_id: str, quantity: int) -> bool:
         """Check if variant has sufficient stock without modifying it."""
@@ -470,11 +553,18 @@ class DatabaseManager:
         for item in items:
             variant_id = item.get('variant_id')
             quantity = int(item.get('quantity', 1))
-            if variant_id:
-                if not self.check_variant_stock(variant_id, quantity):
-                    logger.error(f"create_order: insufficient stock for variant {variant_id}")
-                    return None
+            if not variant_id:
+                logger.error("create_order: item missing variant_id")
+                return None
+            if not self.check_variant_stock(variant_id, quantity):
+                logger.error(
+                    f"create_order: insufficient stock for variant {variant_id} "
+                    f"(need {quantity})"
+                )
+                return None
 
+        order_id = None
+        decremented: List[tuple] = []
         try:
             order_payload = {
                 'user_id': user_id,
@@ -491,36 +581,118 @@ class DatabaseManager:
             }
             r = self.client.table('orders').insert(order_payload).execute()
             if not r.data:
+                logger.error("create_order: orders insert returned no data")
                 return None
             order = r.data[0]
+            order_id = order['id']
 
-            # Insert order_items and decrement stock atomically
             for item in items:
                 size = int(item['size'])
                 if not (30 <= size <= 50):
-                    logger.warning(f"create_order: skipping item with invalid size {size}")
-                    continue
+                    raise ValueError(f"invalid size {size} for variant {item.get('variant_id')}")
+
+                variant_id = item.get('variant_id')
+                quantity = int(item['quantity'])
+                if not self.check_variant_stock(variant_id, quantity):
+                    raise ValueError(
+                        f"insufficient stock for variant {variant_id} (need {quantity})"
+                    )
 
                 item_payload = {
-                    'order_id': order['id'],
+                    'order_id': order_id,
                     'product_name': str(item['product_name']),
                     'size': size,
                     'color': str(item['color']),
-                    'quantity': int(item['quantity']),
+                    'quantity': quantity,
                     'price_per_unit': int(item['price_per_unit']),
-                    'variant_id': item.get('variant_id'),
+                    'variant_id': variant_id,
                 }
                 self.client.table('order_items').insert(item_payload).execute()
 
-                # Decrement stock
-                variant_id = item.get('variant_id')
-                if variant_id:
-                    self.decrement_variant_stock(variant_id, int(item['quantity']))
+                if not self.decrement_variant_stock(variant_id, quantity):
+                    raise ValueError(
+                        f"stock decrement failed for variant {variant_id} (qty {quantity})"
+                    )
+                decremented.append((variant_id, quantity))
 
             return order
         except Exception as e:
-            logger.error(f"create_order error: {e}")
+            logger.error(f"create_order error: {format_db_error(e)}")
+            self._rollback_checkout(order_id, decremented)
             return None
+
+    def submit_checkout_transaction(
+        self,
+        user_id: str,
+        contact_phone: str,
+        shipping_address_id: str,
+        subtotal: int,
+        items: List[Dict],
+        payment_method: str,
+        transaction_reference: str,
+        delivery_fee: int = 50,
+        discount_amount: int = 0,
+        promo_code_id: str = None,
+        customer_name: str = None,
+    ) -> Dict[str, Any]:
+        """
+        Complete checkout: stock check, order, order_items, payment, stock decrement.
+        Rolls back on any failure. Returns {'success': bool, ...}.
+        """
+        method = normalize_payment_method(payment_method)
+        if not method:
+            error = f"invalid payment_method '{payment_method}'"
+            logger.error(f"submit_checkout_transaction: {error}")
+            return {'success': False, 'error': error, 'step': 'payment_method'}
+
+        ref = transaction_reference.strip().replace(' ', '').replace('-', '')
+        if len(ref) < 4:
+            error = f"transaction reference too short: '{ref}'"
+            logger.error(f"submit_checkout_transaction: {error}")
+            return {'success': False, 'error': error, 'step': 'transaction_reference'}
+
+        if not validate_transaction_ref(method, ref):
+            logger.warning(
+                f"submit_checkout_transaction: reference '{ref}' doesn't match "
+                f"expected pattern for {method}, but allowing anyway"
+            )
+
+        order = self.create_order(
+            user_id=user_id,
+            contact_phone=contact_phone,
+            shipping_address_id=shipping_address_id,
+            subtotal=subtotal,
+            items=items,
+            delivery_fee=delivery_fee,
+            discount_amount=discount_amount,
+            promo_code_id=promo_code_id,
+            customer_name=customer_name,
+        )
+        if not order:
+            error = "order creation failed (stock, constraint, or database error)"
+            logger.error(f"submit_checkout_transaction: {error}")
+            return {'success': False, 'error': error, 'step': 'order'}
+
+        order_id = order['id']
+        try:
+            payload = {
+                'order_id': order_id,
+                'payment_method': method,
+                'transaction_reference': ref,
+                'is_verified': False,
+            }
+            r = self.client.table('payments').insert(payload).execute()
+            if not r.data:
+                raise ValueError("payments insert returned no data")
+            payment = r.data[0]
+            return {'success': True, 'order': order, 'payment': payment}
+        except Exception as e:
+            error = format_db_error(e)
+            logger.error(
+                f"submit_checkout_transaction payment insert failed for order {order_id}: {error}"
+            )
+            self._rollback_order_with_stock(order_id)
+            return {'success': False, 'error': error, 'step': 'payment'}
 
     def get_order(self, order_id: str) -> Optional[Dict]:
         try:
@@ -569,26 +741,29 @@ class DatabaseManager:
 
     def create_payment(self, order_id: str, payment_method: str,
                        transaction_reference: str) -> Optional[Dict]:
-        if payment_method not in ALLOWED_PAYMENT_METHODS:
+        method = normalize_payment_method(payment_method)
+        if not method:
             logger.error(f"create_payment: invalid method '{payment_method}'")
             return None
 
-        # Validate transaction reference format
-        ref = transaction_reference.strip()
-        if not validate_transaction_ref(payment_method, ref):
-            logger.warning(f"create_payment: reference '{ref}' doesn't match expected pattern for {payment_method}, but allowing anyway")
+        ref = transaction_reference.strip().replace(' ', '').replace('-', '')
+        if not validate_transaction_ref(method, ref):
+            logger.warning(
+                f"create_payment: reference '{ref}' doesn't match expected pattern "
+                f"for {method}, but allowing anyway"
+            )
 
         try:
             payload = {
                 'order_id': order_id,
-                'payment_method': payment_method,
+                'payment_method': method,
                 'transaction_reference': ref,
                 'is_verified': False,
             }
             r = self.client.table('payments').insert(payload).execute()
             return r.data[0] if r.data else None
         except Exception as e:
-            logger.error(f"create_payment error: {e}")
+            logger.error(f"create_payment error: {format_db_error(e)}")
             return None
 
     def get_payment(self, payment_id: str) -> Optional[Dict]:

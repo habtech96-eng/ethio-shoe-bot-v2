@@ -260,7 +260,7 @@ def register_order_handlers(bot):
         bot.answer_callback_query(call.id)
 
         with bot.retrieve_data(telegram_id, chat_id) as data:
-            data['payment_method'] = method
+            data['payment_method'] = method.lower()
             subtotal     = data['subtotal']
             delivery_fee = data['delivery_fee']
             total        = data['total']
@@ -323,10 +323,14 @@ def register_order_handlers(bot):
                 delivery_fee   = data['delivery_fee']
                 total          = data['total']
                 order_items    = data.get('order_items', [])
-                payment_method = data['payment_method']
+                payment_method = str(data.get('payment_method', '')).strip().lower()
                 customer_name  = data.get('customer_name', 'Customer')
 
-                logger.info(f"Order data retrieved: user={user_id}, phone={phone}, address={address_id}, items={len(order_items)}")
+                logger.info(
+                    f"Order data retrieved: user={user_id}, phone={phone}, "
+                    f"address={address_id}, items={len(order_items)}, "
+                    f"payment_method={payment_method}"
+                )
 
         except Exception as e:
             logger.error(f"Failed to retrieve order data from state: {e}")
@@ -344,54 +348,62 @@ def register_order_handlers(bot):
             bot.delete_state(telegram_id, chat_id)
             return
 
+        if payment_method not in ('telebirr', 'cbe'):
+            bot.send_message(chat_id, "❌ የክፍያ ዘዴ ተበላሽቷል። እባክዎ ከመጀመር ደግሞ ይሞክሩ።")
+            bot.delete_state(telegram_id, chat_id)
+            return
+
         try:
-            order = db.db.create_order(
+            result = db.db.submit_checkout_transaction(
                 user_id=user_id,
                 contact_phone=phone,
                 shipping_address_id=address_id,
                 subtotal=subtotal,
                 items=order_items,
+                payment_method=payment_method,
+                transaction_reference=txn_ref,
                 delivery_fee=delivery_fee,
                 discount_amount=0,
                 promo_code_id=None,
                 customer_name=customer_name,
             )
 
-            if not order:
-                logger.error(f"create_order returned None for user {user_id}")
-                bot.send_message(chat_id, "❌ ትዕዛዝ ማስቀመጥ አልተሳካም። ይህ የሚሆነው ክምችት በቂ ስለማይሆን ወይም የዳታቤዝ ችግር ሊሆን ይችላል። ደግሞ ይሞክሩ።")
+            if not result.get('success'):
+                step = result.get('step', 'unknown')
+                error = result.get('error', 'unknown error')
+                logger.error(
+                    f"submit_checkout_transaction failed for user {user_id} "
+                    f"at step={step}: {error}"
+                )
+                if step == 'order':
+                    bot.send_message(
+                        chat_id,
+                        "❌ ትዕዛዝ ማስቀመጥ አልተሳካም። ክምችት በቂ ስለማይሆን ወይም የዳታቤዝ ችግር "
+                        "ሊሆን ይችላል። ደግሞ ይሞክሩ።"
+                    )
+                elif step == 'payment':
+                    bot.send_message(
+                        chat_id,
+                        "❌ ክፍያ ማስቀመጥ አልተሳካም። Reference ቁጥር ተቀድሞ ጥቅም ላይ "
+                        "የዋለ ሊሆን ይችላል። ደግሞ ይሞክሩ።"
+                    )
+                else:
+                    bot.send_message(chat_id, "❌ ትዕዛዝ ማስቀመጥ አልተሳካም። ደግሞ ይሞክሩ።")
                 bot.delete_state(telegram_id, chat_id)
                 return
 
-            logger.info(f"Order created successfully: {order.get('id')}")
-
-        except Exception as e:
-            logger.error(f"create_order exception for user {user_id}: {e}", exc_info=True)
-            bot.send_message(chat_id, "❌ ትዕዛዝ ማስቀመጥ አልተሳካም። ዳታቤዝ ችግር ተከስቷል። ቆይተው ይሞክሩ።")
-            bot.delete_state(telegram_id, chat_id)
-            return
-
-        # Create payment record
-        try:
-            payment = db.db.create_payment(
-                order_id=order['id'],
-                payment_method=payment_method,
-                transaction_reference=txn_ref,
+            order = result['order']
+            payment = result['payment']
+            logger.info(
+                f"Checkout complete: order={order.get('id')}, payment={payment.get('id')}"
             )
 
-            if not payment:
-                logger.error(f"create_payment returned None for order {order['id']}")
-                bot.send_message(chat_id,
-                    "⚠️ ትዕዛዙ ተቀምጧል ነገር ግን ክፍያ ማስቀመጥ አልተሳካም። Admin ያነጋግሩ።")
-                bot.delete_state(telegram_id, chat_id)
-                return
-
-            logger.info(f"Payment created successfully: {payment.get('id')}")
-
         except Exception as e:
-            logger.error(f"create_payment exception for order {order['id']}: {e}", exc_info=True)
-            bot.send_message(chat_id,
-                "⚠️ ትዕዛዙ ተቀምጧል ነገር ግን ክፍያ ማስቀመጥ አልተሳካም። እባክዎ ደግሞ ይሞክሩ።")
+            logger.error(
+                f"submit_checkout_transaction exception for user {user_id}: {e}",
+                exc_info=True,
+            )
+            bot.send_message(chat_id, "❌ ትዕዛዝ ማስቀመጥ አልተሳካም። ዳታቤዝ ችግር ተከስቷል። ቆይተው ይሞክሩ።")
             bot.delete_state(telegram_id, chat_id)
             return
 
