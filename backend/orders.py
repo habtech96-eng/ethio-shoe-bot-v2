@@ -128,15 +128,26 @@ def register_order_handlers(bot):
 
         if message.content_type == 'contact' and message.contact:
             phone = message.contact.phone_number
+            logger.info(f"Contact shared for user {telegram_id}: {phone}")
         else:
             phone = message.text.strip() if message.text else ''
             if not phone or len(phone) < 7:
-                bot.send_message(chat_id, "⚠️ ትክክለኛ ስልክ ቁጥር ያስገቡ፦")
+                bot.send_message(chat_id, "⚠️ ትክክለኛ ስልክ ቁጥር ያስገባ፦")
                 return
 
         with bot.retrieve_data(telegram_id, chat_id) as data:
             data['phone'] = phone
             user_id       = data['user_id']
+
+        # CRITICAL: Save phone to user record in database immediately
+        try:
+            db.db.update_user_phone(user_id, phone)
+            logger.info(f"Updated phone for user {user_id}")
+        except Exception as e:
+            logger.error(f"Failed to update user phone: {e}")
+
+        # CRITICAL: Clear the contact keyboard BEFORE showing address options
+        bot.send_message(chat_id, "✅ ስልክ ቁጥር ተቀምጧል!", reply_markup=ReplyKeyboardRemove())
 
         addresses = db.db.get_user_addresses(user_id)
         if addresses:

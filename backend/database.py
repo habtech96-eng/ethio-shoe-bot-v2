@@ -99,6 +99,18 @@ class DatabaseManager:
             logger.error(f"get_user_by_id error: {e}")
             return None
 
+    def update_user_phone(self, user_id: str, phone_number: str) -> bool:
+        """Update user's phone number. Returns True on success."""
+        try:
+            self.client.table('users').update({
+                'phone_number': phone_number,
+                'updated_at': self._now()
+            }).eq('id', user_id).execute()
+            return True
+        except Exception as e:
+            logger.error(f"update_user_phone error: {e}")
+            return False
+
     # --------------------------------------------------------------- addresses
 
     def add_address(self, user_id: str, city: str, subcity_or_zone: str = None,
@@ -256,6 +268,112 @@ class DatabaseManager:
             return int(variant.get('stock', 0)) >= quantity
         except Exception as e:
             logger.error(f"check_variant_stock error: {e}")
+            return False
+
+    def delete_variant(self, variant_id: str, cleanup_image: bool = True) -> bool:
+        """
+        Delete a product variant, optionally cleaning up its Supabase Storage image.
+
+        Returns True on success. If the variant has a Supabase Storage image_url,
+        attempts to delete it from the bucket to prevent orphaned files.
+        """
+        try:
+            # First get the variant to check for image
+            variant = self.get_variant(variant_id)
+            if not variant:
+                logger.error(f"delete_variant: variant {variant_id} not found")
+                return False
+
+            image_url = variant.get('image_url')
+            telegram_file_id = variant.get('telegram_file_id')
+
+            # Delete the variant from database
+            self.client.table('product_variants').delete().eq('id', variant_id).execute()
+
+            # Clean up Supabase Storage image if it exists (and no telegram_file_id)
+            # Only cleanup if it's a Supabase Storage URL, not external
+            if cleanup_image and image_url and not telegram_file_id:
+                self._cleanup_storage_image(image_url)
+
+            logger.info(f"Deleted variant {variant_id}")
+            return True
+        except Exception as e:
+            logger.error(f"delete_variant error: {e}")
+            return False
+
+    def _cleanup_storage_image(self, image_url: str) -> bool:
+        """
+        Helper to delete an image from Supabase Storage.
+
+        Only works for URLs from our own bucket (product-images).
+        External URLs are ignored.
+        """
+        try:
+            # Check if it's a Supabase Storage URL
+            if not image_url or SUPABASE_URL not in image_url:
+                return False
+
+            # Extract the path from the URL
+            # URL format: https://xxxx.supabase.co/storage/v1/object/public/product-images/path
+            if '/product-images/' not in image_url:
+                return False
+
+            # Get the path after /product-images/
+            path_start = image_url.find('/product-images/') + len('/product-images/')
+            file_path = image_url[path_start:]
+
+            if not file_path:
+                return False
+
+            # Delete from storage bucket
+            self.client.storage.from_('product-images').remove([file_path])
+            logger.info(f"Cleaned up storage image: {file_path}")
+            return True
+        except Exception as e:
+            logger.warning(f"_cleanup_storage_image error (non-critical): {e}")
+            return False
+
+    def get_product_variants(self, product_id: str) -> List[Dict]:
+        """Get all variants for a product."""
+        try:
+            r = self.client.table('product_variants').select('*').eq('product_id', product_id).execute()
+            return r.data or []
+        except Exception as e:
+            logger.error(f"get_product_variants error: {e}")
+            return []
+
+    def delete_product(self, product_id: str) -> bool:
+        """
+        Delete a product and all its variants with image cleanup.
+
+        Note: Sets product to inactive instead of hard delete,
+        and cleans up storage images for variants that used Supabase Storage.
+        """
+        try:
+            # Get all variants to clean up their images
+            variants = self.get_product_variants(product_id)
+
+            # Delete each variant's storage image
+            for variant in variants:
+                image_url = variant.get('image_url')
+                telegram_file_id = variant.get('telegram_file_id')
+                # Only cleanup Supabase Storage images, not Telegram file IDs
+                if image_url and not telegram_file_id:
+                    self._cleanup_storage_image(image_url)
+
+            # Soft delete - set product to inactive
+            self.client.table('products').update({
+                'is_active': False,
+                'updated_at': self._now()
+            }).eq('id', product_id).execute()
+
+            # Delete all variants
+            self.client.table('product_variants').delete().eq('product_id', product_id).execute()
+
+            logger.info(f"Deleted product {product_id} and {len(variants)} variants")
+            return True
+        except Exception as e:
+            logger.error(f"delete_product error: {e}")
             return False
 
     # -------------------------------------------------------------------- cart
