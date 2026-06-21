@@ -96,7 +96,8 @@ def register_order_handlers(bot):
 
         bot.set_state(telegram_id, CustomerOrderStates.waiting_for_phone, chat_id)
         with bot.retrieve_data(telegram_id, chat_id) as data:
-            data['user_id']       = user['id']
+            data['user_id']       = str(user['id'])
+            data['telegram_id']   = telegram_id
             data['order_items']   = order_items_data
             data['subtotal']      = subtotal
             data['delivery_fee']  = delivery_fee
@@ -177,7 +178,16 @@ def register_order_handlers(bot):
         else:
             address_id = call.data.replace("addr_", "", 1)
             with bot.retrieve_data(telegram_id, chat_id) as data:
-                data['address_id'] = address_id
+                user_uuid = str(data.get('user_id', ''))
+            address_record = db.db.get_user_address(address_id, user_uuid)
+            if not address_record:
+                bot.send_message(
+                    chat_id,
+                    f"❌ Error: address not found (address_id={address_id!r})"
+                )
+                return
+            with bot.retrieve_data(telegram_id, chat_id) as data:
+                data['address_id'] = str(address_record['id'])
             _ask_payment_method(bot, chat_id, telegram_id)
 
     # ---------------------------------------------------------------- city
@@ -232,7 +242,7 @@ def register_order_handlers(bot):
             return
 
         with bot.retrieve_data(telegram_id, chat_id) as data:
-            data['address_id'] = address['id']
+            data['address_id'] = str(address['id'])
 
         _ask_payment_method(bot, chat_id, telegram_id)
 
@@ -353,11 +363,35 @@ def register_order_handlers(bot):
             bot.delete_state(telegram_id, chat_id)
             return
 
+        # Resolve internal users.id UUID from Telegram ID — never pass telegram_id to orders
+        user_record = db.db.get_user(telegram_id)
+        if not user_record or not user_record.get('id'):
+            bot.send_message(chat_id, "❌ Error: user record not found for this Telegram account")
+            bot.delete_state(telegram_id, chat_id)
+            return
+        user_uuid = str(user_record['id'])
+
+        # Resolve user_addresses.id UUID from database — never pass plain text
+        address_record = db.db.get_user_address(str(address_id), user_uuid)
+        if not address_record or not address_record.get('id'):
+            bot.send_message(
+                chat_id,
+                f"❌ Error: shipping address not found (address_id={address_id!r}, user_id={user_uuid})"
+            )
+            bot.delete_state(telegram_id, chat_id)
+            return
+        shipping_address_uuid = str(address_record['id'])
+
+        logger.info(
+            f"Checkout UUIDs resolved: telegram_id={telegram_id}, "
+            f"user_uuid={user_uuid}, shipping_address_uuid={shipping_address_uuid}"
+        )
+
         try:
             result = db.db.submit_checkout_transaction(
-                user_id=user_id,
+                user_id=user_uuid,
                 contact_phone=phone,
-                shipping_address_id=address_id,
+                shipping_address_id=shipping_address_uuid,
                 subtotal=subtotal,
                 items=order_items,
                 payment_method=payment_method,
@@ -372,23 +406,10 @@ def register_order_handlers(bot):
                 step = result.get('step', 'unknown')
                 error = result.get('error', 'unknown error')
                 logger.error(
-                    f"submit_checkout_transaction failed for user {user_id} "
+                    f"submit_checkout_transaction failed for user {user_uuid} "
                     f"at step={step}: {error}"
                 )
-                if step == 'order':
-                    bot.send_message(
-                        chat_id,
-                        "❌ ትዕዛዝ ማስቀመጥ አልተሳካም። ክምችት በቂ ስለማይሆን ወይም የዳታቤዝ ችግር "
-                        "ሊሆን ይችላል። ደግሞ ይሞክሩ።"
-                    )
-                elif step == 'payment':
-                    bot.send_message(
-                        chat_id,
-                        "❌ ክፍያ ማስቀመጥ አልተሳካም። Reference ቁጥር ተቀድሞ ጥቅም ላይ "
-                        "የዋለ ሊሆን ይችላል። ደግሞ ይሞክሩ።"
-                    )
-                else:
-                    bot.send_message(chat_id, "❌ ትዕዛዝ ማስቀመጥ አልተሳካም። ደግሞ ይሞክሩ።")
+                bot.send_message(chat_id, f"❌ Error: {error}")
                 bot.delete_state(telegram_id, chat_id)
                 return
 
@@ -400,17 +421,17 @@ def register_order_handlers(bot):
 
         except Exception as e:
             logger.error(
-                f"submit_checkout_transaction exception for user {user_id}: {e}",
+                f"submit_checkout_transaction exception for user {user_uuid}: {e}",
                 exc_info=True,
             )
-            bot.send_message(chat_id, "❌ ትዕዛዝ ማስቀመጥ አልተሳካም። ዳታቤዝ ችግር ተከስቷል። ቆይተው ይሞክሩ።")
+            bot.send_message(chat_id, f"❌ Error: {str(e)}")
             bot.delete_state(telegram_id, chat_id)
             return
 
         # Clear cart only after successful order AND payment creation
         try:
-            db.db.clear_cart(user_id)
-            logger.info(f"Cart cleared for user {user_id}")
+            db.db.clear_cart(user_uuid)
+            logger.info(f"Cart cleared for user {user_uuid}")
         except Exception as e:
             logger.error(f"clear_cart exception: {e}")
 

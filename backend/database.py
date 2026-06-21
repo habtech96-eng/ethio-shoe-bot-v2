@@ -39,6 +39,16 @@ TXN_REF_PATTERNS = {
     'cbe': r'^\d{10,16}$'  # CBE refs are numeric 10-16 digits
 }
 
+UUID_PATTERN = re.compile(
+    r'^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$',
+    re.IGNORECASE,
+)
+
+
+def is_valid_uuid(value: Any) -> bool:
+    """Return True if value is a canonical UUID string."""
+    return bool(value and UUID_PATTERN.match(str(value).strip()))
+
 
 def validate_transaction_ref(method: str, ref: str) -> bool:
     """Validate transaction reference format for the payment method."""
@@ -160,6 +170,26 @@ class DatabaseManager:
         except Exception as e:
             logger.error(f"get_user_addresses error: {e}")
             return []
+
+    def get_user_address(self, address_id: str, user_id: str) -> Optional[Dict]:
+        """Fetch a single address by UUID, scoped to the owning user."""
+        if not is_valid_uuid(address_id) or not is_valid_uuid(user_id):
+            logger.error(
+                f"get_user_address: invalid UUID(s) address_id={address_id!r}, user_id={user_id!r}"
+            )
+            return None
+        try:
+            r = (
+                self.client.table('user_addresses')
+                .select('*')
+                .eq('id', str(address_id).strip())
+                .eq('user_id', str(user_id).strip())
+                .execute()
+            )
+            return r.data[0] if r.data else None
+        except Exception as e:
+            logger.error(f"get_user_address error: {format_db_error(e)}")
+            return None
 
     # --------------------------------------------------------------- products
 
@@ -549,19 +579,44 @@ class DatabaseManager:
         discount_amount = int(discount_amount)
         total_amount = subtotal + delivery_fee - discount_amount
 
+        user_id = str(user_id).strip()
+        shipping_address_id = str(shipping_address_id).strip()
+
+        if not is_valid_uuid(user_id):
+            raise ValueError(
+                f"orders.user_id must be a users.id UUID, got {user_id!r} "
+                f"(telegram_id cannot be used here)"
+            )
+        if not is_valid_uuid(shipping_address_id):
+            raise ValueError(
+                f"orders.shipping_address_id must be a user_addresses.id UUID, "
+                f"got {shipping_address_id!r}"
+            )
+
+        user_record = self.get_user_by_id(user_id)
+        if not user_record:
+            raise ValueError(f"users row not found for id={user_id}")
+
+        address_record = self.get_user_address(shipping_address_id, user_id)
+        if not address_record:
+            raise ValueError(
+                f"user_addresses row not found for id={shipping_address_id} "
+                f"and user_id={user_id}"
+            )
+
         # Validate all items have sufficient stock first
         for item in items:
             variant_id = item.get('variant_id')
             quantity = int(item.get('quantity', 1))
             if not variant_id:
                 logger.error("create_order: item missing variant_id")
-                return None
+                raise ValueError("order item missing variant_id")
             if not self.check_variant_stock(variant_id, quantity):
-                logger.error(
-                    f"create_order: insufficient stock for variant {variant_id} "
-                    f"(need {quantity})"
+                msg = (
+                    f"insufficient stock for variant {variant_id} (need {quantity})"
                 )
-                return None
+                logger.error(f"create_order: {msg}")
+                raise ValueError(msg)
 
         order_id = None
         decremented: List[tuple] = []
@@ -582,7 +637,7 @@ class DatabaseManager:
             r = self.client.table('orders').insert(order_payload).execute()
             if not r.data:
                 logger.error("create_order: orders insert returned no data")
-                return None
+                raise ValueError("orders insert returned no data")
             order = r.data[0]
             order_id = order['id']
 
@@ -619,7 +674,7 @@ class DatabaseManager:
         except Exception as e:
             logger.error(f"create_order error: {format_db_error(e)}")
             self._rollback_checkout(order_id, decremented)
-            return None
+            raise
 
     def submit_checkout_transaction(
         self,
@@ -657,20 +712,21 @@ class DatabaseManager:
                 f"expected pattern for {method}, but allowing anyway"
             )
 
-        order = self.create_order(
-            user_id=user_id,
-            contact_phone=contact_phone,
-            shipping_address_id=shipping_address_id,
-            subtotal=subtotal,
-            items=items,
-            delivery_fee=delivery_fee,
-            discount_amount=discount_amount,
-            promo_code_id=promo_code_id,
-            customer_name=customer_name,
-        )
-        if not order:
-            error = "order creation failed (stock, constraint, or database error)"
-            logger.error(f"submit_checkout_transaction: {error}")
+        try:
+            order = self.create_order(
+                user_id=user_id,
+                contact_phone=contact_phone,
+                shipping_address_id=shipping_address_id,
+                subtotal=subtotal,
+                items=items,
+                delivery_fee=delivery_fee,
+                discount_amount=discount_amount,
+                promo_code_id=promo_code_id,
+                customer_name=customer_name,
+            )
+        except Exception as e:
+            error = format_db_error(e)
+            logger.error(f"submit_checkout_transaction order step failed: {error}")
             return {'success': False, 'error': error, 'step': 'order'}
 
         order_id = order['id']
