@@ -169,16 +169,35 @@ class DatabaseManager:
             logger.error(f"add_product error: {e}")
             return None
 
+    def _fetch_in_stock_catalog_products(self, limit: Optional[int] = None,
+                                         **filters) -> List[Dict]:
+        """
+        Return active products that have at least one variant with stock > 0.
+        Uses an inner join on product_variants so fully out-of-stock products
+        are excluded before results reach catalog handlers.
+        """
+        try:
+            query = (
+                self.client.table('products')
+                .select('*, product_variants!inner(*)')
+                .eq('is_active', True)
+                .gt('product_variants.stock', 0)
+            )
+            for column, value in filters.items():
+                query = query.eq(column, value)
+            if limit is not None:
+                query = query.limit(limit)
+            r = query.execute()
+            return r.data or []
+        except Exception as e:
+            logger.error(f"_fetch_in_stock_catalog_products error: {e}")
+            return []
+
     def get_products_by_category(self, category: str) -> List[Dict]:
         if category not in ALLOWED_CATEGORIES:
             logger.error(f"get_products_by_category: invalid category '{category}'")
             return []
-        try:
-            r = self.client.table('products').select('*, product_variants(*)').eq('category', category).eq('is_active', True).execute()
-            return r.data or []
-        except Exception as e:
-            logger.error(f"get_products_by_category error: {e}")
-            return []
+        return self._fetch_in_stock_catalog_products(category=category)
 
     def get_product(self, product_id: str) -> Optional[Dict]:
         try:
@@ -189,12 +208,7 @@ class DatabaseManager:
             return None
 
     def get_all_products(self, limit: int = 50) -> List[Dict]:
-        try:
-            r = self.client.table('products').select('*, product_variants(*)').eq('is_active', True).limit(limit).execute()
-            return r.data or []
-        except Exception as e:
-            logger.error(f"get_all_products error: {e}")
-            return []
+        return self._fetch_in_stock_catalog_products(limit=limit)
 
     # --------------------------------------------------------- product variants
 
