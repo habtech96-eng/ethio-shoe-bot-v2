@@ -519,19 +519,49 @@ class DatabaseManager:
             logger.error(f"add_to_cart: invalid quantity {quantity}")
             return None
         try:
-            existing = self.client.table('cart_items').select('*').eq('user_id', user_id).eq('variant_id', variant_id).execute()
+            # Check available stock for this variant before doing anything
+            variant = self.get_variant(variant_id)
+            if not variant:
+                logger.error(f"add_to_cart: variant {variant_id} not found")
+                return None
+            available_stock = int(variant.get('stock', 0))
+            if available_stock <= 0:
+                logger.warning(f"add_to_cart: variant {variant_id} out of stock")
+                return None
+
+            # Check if this variant already exists in the user's cart
+            existing = (
+                self.client.table('cart_items')
+                .select('*')
+                .eq('user_id', user_id)
+                .eq('variant_id', variant_id)
+                .execute()
+            )
             if existing.data:
                 item = existing.data[0]
-                new_qty = item['quantity'] + quantity
-                if new_qty <= 0:
-                    return None
-                r = self.client.table('cart_items').update({'quantity': new_qty}).eq('id', item['id']).execute()
+                new_qty = int(item['quantity']) + quantity
+                # Enforce cap: never let total quantity exceed available stock
+                if new_qty > available_stock:
+                    logger.warning(
+                        f"add_to_cart: capping quantity to stock "
+                        f"(requested {new_qty}, stock {available_stock})"
+                    )
+                    new_qty = available_stock
+                r = (
+                    self.client.table('cart_items')
+                    .update({'quantity': new_qty})
+                    .eq('id', item['id'])
+                    .execute()
+                )
                 return r.data[0] if r.data else None
-            payload = {'user_id': user_id, 'variant_id': variant_id, 'quantity': quantity}
+
+            # New cart line — cap the requested quantity to available stock
+            insert_qty = min(quantity, available_stock)
+            payload = {'user_id': user_id, 'variant_id': variant_id, 'quantity': insert_qty}
             r = self.client.table('cart_items').insert(payload).execute()
             return r.data[0] if r.data else None
         except Exception as e:
-            logger.error(f"add_to_cart error: {e}")
+            logger.error(f"add_to_cart error: {format_db_error(e)}")
             return None
 
     def update_cart_item_quantity(self, cart_item_id: str, new_quantity: int) -> bool:
@@ -741,6 +771,17 @@ class DatabaseManager:
             if not r.data:
                 raise ValueError("payments insert returned no data")
             payment = r.data[0]
+
+            # Strictly clear the user's cart now that the order + payment succeeded
+            try:
+                self.clear_cart(user_id)
+                logger.info(f"Cart cleared for user {user_id} after order {order_id}")
+            except Exception as ce:
+                logger.error(
+                    f"submit_checkout_transaction: clear_cart failed for user "
+                    f"{user_id} after order {order_id}: {format_db_error(ce)}"
+                )
+
             return {'success': True, 'order': order, 'payment': payment}
         except Exception as e:
             error = format_db_error(e)
